@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBar: MenuBarController!
     private var onboardingWindow: NSWindow?
     private var settingsWindow: NSWindow?
+    private var historyWindow: NSWindow?
     private var aboutWindow: NSWindow?
     private let updater = Updater()
 
@@ -19,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             coordinator: coordinator,
             onShowAbout: { [weak self] in self?.showAbout() },
             onShowSettings: { [weak self] in self?.showSettings() },
+            onShowHistory: { [weak self] in self?.showHistory() },
             onShowOnboarding: { [weak self] in self?.showOnboarding() },
             onQuit: { NSApp.terminate(nil) }
         )
@@ -106,5 +108,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow = win
+    }
+
+    private func showHistory() {
+        if let win = historyWindow {
+            win.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let view = HistoryView(coordinator: coordinator).textSelection(.enabled)
+        let host = NSHostingController(rootView: view)
+        let win = NSWindow(contentViewController: host)
+        win.title = "Purr - History"
+        win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        win.setContentSize(NSSize(width: 560, height: 520))
+        win.center()
+        win.isReleasedWhenClosed = false
+        win.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        historyWindow = win
     }
 }

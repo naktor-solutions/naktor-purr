@@ -11,6 +11,7 @@ final class MenuBarController {
 
     private let onShowAbout: () -> Void
     private let onShowSettings: () -> Void
+    private let onShowHistory: () -> Void
     private let onShowOnboarding: () -> Void
     private let onQuit: () -> Void
 
@@ -29,11 +30,13 @@ final class MenuBarController {
         coordinator: AppCoordinator,
         onShowAbout: @escaping () -> Void,
         onShowSettings: @escaping () -> Void,
+        onShowHistory: @escaping () -> Void,
         onShowOnboarding: @escaping () -> Void,
         onQuit: @escaping () -> Void
     ) {
         self.onShowAbout = onShowAbout
         self.onShowSettings = onShowSettings
+        self.onShowHistory = onShowHistory
         self.onShowOnboarding = onShowOnboarding
         self.onQuit = onQuit
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -60,6 +63,7 @@ final class MenuBarController {
         menu.addItem(menuItem(title: "About Purr", selector: #selector(triggerAbout)))
         menu.addItem(.separator())
         menu.addItem(menuItem(title: "Settings", selector: #selector(triggerSettings)))
+        menu.addItem(menuItem(title: "History…", selector: #selector(triggerHistory)))
         menu.addItem(menuItem(title: "Onboarding Setup", selector: #selector(triggerOnboarding)))
         menu.addItem(.separator())
         // The Quit key equivalent is cosmetic - it makes ⌃⌥Q visible next to
@@ -94,6 +98,7 @@ final class MenuBarController {
 
     @objc private func triggerAbout() { onShowAbout() }
     @objc private func triggerSettings() { onShowSettings() }
+    @objc private func triggerHistory() { onShowHistory() }
     @objc private func triggerOnboarding() { onShowOnboarding() }
     @objc private func triggerQuit() { onQuit() }
 

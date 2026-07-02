@@ -42,6 +42,8 @@ struct SettingsView: View {
                 .tabItem { Label("Features", systemImage: "sparkles") }
             dictionaryTab
                 .tabItem { Label("Customization", systemImage: "text.book.closed") }
+            HistoryView(coordinator: coordinator)
+                .tabItem { Label("History", systemImage: "clock.arrow.circlepath") }
         }
         .padding(.top)
         .frame(minWidth: 580, minHeight: 580)
