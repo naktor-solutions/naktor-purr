@@ -393,14 +393,11 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
-    // Resolves the meeting-transcription engine from Settings at the moment
-    // a meeting stops. Parakeet reuses the shared instance (its CoreML pipes
-    // are expensive to duplicate). Whisper reuses the dictation engine when
-    // it's already a matching WhisperEngine; otherwise a fresh instance
-    // lazy-loads on first use - meetings are infrequent enough that keeping
-    // a second pipe resident isn't worth it.
-    private func currentMeetingEngine() -> (engine: any TranscriptionEngine, label: String) {
-        switch SettingsStore.shared.meetingEngine {
+    // Shared by meeting mode and history retry: Parakeet reuses the shared
+    // instance (expensive CoreML pipes), Whisper reuses the dictation engine
+    // when the model matches, otherwise a fresh instance lazy-loads.
+    private func resolveEngine(_ choice: SettingsStore.Engine) -> (engine: any TranscriptionEngine, label: String) {
+        switch choice {
         case .parakeet:
             return (parakeet, "Parakeet TDT v2")
         case .whisper:
@@ -410,6 +407,11 @@ final class AppCoordinator: ObservableObject {
             }
             return (WhisperEngine(modelName: model), "Whisper (\(model))")
         }
+    }
+
+    // Resolves the meeting-transcription engine from Settings at the moment a meeting stops.
+    private func currentMeetingEngine() -> (engine: any TranscriptionEngine, label: String) {
+        resolveEngine(SettingsStore.shared.meetingEngine)
     }
 
     private func installHotkeys() {
@@ -1000,6 +1002,37 @@ final class AppCoordinator: ObservableObject {
             customVoiceCommands: SettingsStore.shared.customVoiceCommands,
             dictionary: SettingsStore.shared.dictionary
         )
+    }
+
+    // Re-runs transcription + post-processing over a history entry's saved
+    // WAV. Updates the entry in place - never types into other apps: the
+    // user's cursor is wherever they left it, not where it was when the
+    // original dictation ran.
+    func retryHistoryEntry(_ id: UUID, using choice: SettingsStore.Engine) async {
+        guard let entry = HistoryStore.shared.entries.first(where: { $0.id == id }),
+            let url = HistoryStore.shared.audioURL(for: entry)
+        else { return }
+        do {
+            let samples = try WAVFile.read(url: url)
+            let prepared = AudioPreprocessor.normalize(samples).samples
+            let (engine, _) = resolveEngine(choice)
+            let raw = try await engine.transcribe(samples: prepared)
+            let processed = makePostProcessor().apply(raw)
+            HistoryStore.shared.update(id) {
+                $0.rawText = raw
+                $0.processedText = processed.text
+                $0.status = .ok
+                $0.errorMessage = nil
+                $0.engineUsed = Self.engineUsedLabel(
+                    engine: choice, modelName: SettingsStore.shared.modelName)
+            }
+        } catch {
+            log.error("History retry failed: \(error.localizedDescription, privacy: .public)")
+            HistoryStore.shared.update(id) {
+                $0.status = .failed
+                $0.errorMessage = error.localizedDescription
+            }
+        }
     }
 
     // Spec format for DictationEntry.engineUsed: stable machine-ish strings,
