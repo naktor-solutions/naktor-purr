@@ -13,6 +13,7 @@ final class RecordingHUD {
         case warmingUp
         case recording
         case transcribing
+        case polishing
         case meeting(elapsed: TimeInterval)
         case voiceEdit
         case summarizing
@@ -335,6 +336,7 @@ final class HUDModel: ObservableObject {
         case .warmingUp: return "Warming up…"
         case .recording: return "Listening"
         case .transcribing: return "Transcribing"
+        case .polishing: return "Polishing…"
         case .voiceEdit: return "Voice Edit"
         case .meeting(let t): return "Meeting · \(Self.formatElapsed(t))"
         case .summarizing: return "Summarizing meeting"
@@ -382,7 +384,7 @@ private struct HUDView: View {
                     Image(systemName: "record.circle.fill")
                         .foregroundStyle(.red)
                         .frame(width: 38, height: 24)
-                case .warmingUp, .transcribing, .summarizing:
+                case .warmingUp, .transcribing, .polishing, .summarizing:
                     ProgressView()
                         .controlSize(.small)
                         .progressViewStyle(.circular)

@@ -551,6 +551,15 @@ final class AppCoordinator: ObservableObject {
             log.info("Transcribe press ignored: HUD message up or transcription in flight.")
             return
         }
+        // Overlap a cold Gemma load with the user speaking (EditInterpreter
+        // does the same for voice edit). Only for batch dictations - Smart
+        // Typing never LLM-processes.
+        if SettingsStore.shared.llmPostProcessLevel != .off,
+            !SettingsStore.shared.smartTyping,
+            LLMModelManager.isInstalled()
+        {
+            Task { await LlamaRuntime.shared.warmUp() }
+        }
         log.info(
             "Transcribe press received (state=\(String(describing: self.state), privacy: .public), mode=\(SettingsStore.shared.hotkeyMode.rawValue, privacy: .public))"
         )
@@ -701,7 +710,17 @@ final class AppCoordinator: ObservableObject {
         do {
             let raw = try await engine.transcribe(samples: prepared.samples)
             let processed = makePostProcessor().apply(raw)
-            if processed.text.isEmpty {
+            // Optional LLM pass, after the deterministic pipeline ("scratch
+            // that" and dropPreviousChunks are already resolved) and before
+            // any insertion. polish() returns the input untouched when the
+            // level is Off, the model is missing, or generation fails/times
+            // out - the dictation always ships.
+            var finalText = processed.text
+            if !finalText.isEmpty, SettingsStore.shared.llmPostProcessLevel != .off {
+                hud.show(.polishing)
+                finalText = await LLMPostProcessor.polish(finalText)
+            }
+            if finalText.isEmpty {
                 state = .idle
                 if processed.dropPreviousChunks > 0 {
                     hud.showMessage("Nothing to scratch here", autoHideAfter: 2.5)
@@ -709,7 +728,7 @@ final class AppCoordinator: ObservableObject {
                     hud.hide()
                 }
             } else if SettingsStore.shared.autoPaste {
-                inserter.insert(processed.text + " ")
+                inserter.insert(finalText + " ")
                 state = .idle
                 if micWasVeryQuiet {
                     hud.showMessage(
@@ -720,7 +739,7 @@ final class AppCoordinator: ObservableObject {
                     hud.hide()
                 }
             } else {
-                copyToClipboard(processed.text)
+                copyToClipboard(finalText)
                 state = .idle
                 hud.flashCopied()
             }
@@ -729,7 +748,7 @@ final class AppCoordinator: ObservableObject {
             // a retryable .interrupted entry.
             HistoryStore.shared.update(entryID) {
                 $0.rawText = raw
-                $0.processedText = processed.text
+                $0.processedText = finalText
                 $0.status = .ok
             }
         } catch {
@@ -1036,9 +1055,13 @@ final class AppCoordinator: ObservableObject {
             }
             let raw = try await engine.transcribe(samples: prepared)
             let processed = makePostProcessor().apply(raw)
+            // Retry produces what a fresh dictation would under the current
+            // settings, including the optional LLM pass; rawText stays the
+            // untouched ASR output.
+            let polished = await LLMPostProcessor.polish(processed.text)
             HistoryStore.shared.update(id) {
                 $0.rawText = raw
-                $0.processedText = processed.text
+                $0.processedText = polished
                 $0.status = .ok
                 $0.errorMessage = nil
                 $0.engineUsed = Self.engineUsedLabel(
