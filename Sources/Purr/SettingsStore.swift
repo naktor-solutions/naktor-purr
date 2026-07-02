@@ -39,6 +39,7 @@ final class SettingsStore: ObservableObject {
         static let summaryBackend = "feature.summaryBackend"
         static let meetingsFolderPath = "meetings.folderPath"
         static let systemAudioNoticeShown = "meetings.systemAudioNoticeShown"
+        static let historyAudioRetention = "history.audioRetention"
     }
 
     // Which on-device LLM produces the meeting summary. Apple FM is the
@@ -143,6 +144,12 @@ final class SettingsStore: ObservableObject {
     // batch-only, so Whisper's lack of streaming doesn't matter here.
     @Published var meetingEngine: Engine {
         didSet { defaults.set(meetingEngine.rawValue, forKey: Keys.meetingEngine) }
+    }
+
+    // How long dictation audio is kept for retry/recover. Text stays until
+    // manually deleted; only the WAVs expire. "Never" keeps no audio at all.
+    @Published var historyAudioRetention: AudioRetention {
+        didSet { defaults.set(historyAudioRetention.rawValue, forKey: Keys.historyAudioRetention) }
     }
 
     // Whisper-only: when on, transcription runs the X→English translate task
@@ -263,6 +270,9 @@ final class SettingsStore: ObservableObject {
         let storedMeetingEngine =
             defaults.string(forKey: Keys.meetingEngine) ?? Engine.parakeet.rawValue
         self.meetingEngine = Engine(rawValue: storedMeetingEngine) ?? .parakeet
+        let storedRetention =
+            defaults.string(forKey: Keys.historyAudioRetention) ?? AudioRetention.week.rawValue
+        self.historyAudioRetention = AudioRetention(rawValue: storedRetention) ?? .week
         self.translateToEnglish = defaults.object(forKey: Keys.translateToEnglish) as? Bool ?? false
         self.translationSourceLanguage = defaults.string(forKey: Keys.translationSourceLanguage) ?? ""
         self.smartTyping = defaults.object(forKey: Keys.smartTyping) as? Bool ?? false
@@ -332,6 +342,7 @@ final class SettingsStore: ObservableObject {
         voiceEditEnabled = false
         engine = .parakeet
         meetingEngine = .parakeet
+        historyAudioRetention = .week
         modelName = ModelManager.defaultModel
         translateToEnglish = false
         translationSourceLanguage = ""

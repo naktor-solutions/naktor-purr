@@ -180,6 +180,9 @@ final class AppCoordinator: ObservableObject {
         // on Bluetooth to avoid pinning it to SCO mode.
         recorder.allowsWarmKeeping = true
 
+        HistoryStore.shared.retentionProvider = { SettingsStore.shared.historyAudioRetention }
+        HistoryStore.shared.startDailySweeps()
+
         meeting = MeetingPipeline(
             hud: hud,
             summarizer: summarizer,
