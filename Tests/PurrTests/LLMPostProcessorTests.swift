@@ -40,8 +40,22 @@ struct LLMPostProcessorTests {
 
     @Test func maxTokensScalesWithInputAndClamps() {
         #expect(LLMPostProcessor.maxTokens(forInputLength: 10) == 256)
-        #expect(LLMPostProcessor.maxTokens(forInputLength: 1000) == 500)
+        #expect(LLMPostProcessor.maxTokens(forInputLength: 1000) == 1000)
         #expect(LLMPostProcessor.maxTokens(forInputLength: 100_000) == 2000)
+    }
+
+    @Test func isFenceOnlyDetectsBareFenceMarkersAndEmptyOutput() {
+        #expect(LLMPostProcessor.isFenceOnly("```"))
+        #expect(LLMPostProcessor.isFenceOnly("`"))
+        #expect(LLMPostProcessor.isFenceOnly(""))
+        #expect(!LLMPostProcessor.isFenceOnly("hola"))
+    }
+
+    @Test func sanitizePassesThroughLoneBareFence() {
+        // Documents the pass-through: sanitize's count >= 2 guard only fires
+        // on a matched opening/closing pair, so a single bare fence line is
+        // untouched by sanitize - isFenceOnly is what catches it in polish.
+        #expect(LLMPostProcessor.sanitize("```") == "```")
     }
 
     @Test func offLevelPassesThroughUntouched() async {

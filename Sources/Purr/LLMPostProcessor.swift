@@ -29,16 +29,13 @@ enum LLMPostProcessLevel: String, Codable, CaseIterable, Identifiable {
 enum LLMPostProcessor {
     private static let log = Logger(subsystem: "com.arunbrahma.purr", category: "llm-postprocess")
 
-    // 15 s watchdog: LlamaRuntime serializes generations, so a meeting
-    // summary in flight can queue this call - past the deadline the dictation
-    // ships deterministic rather than waiting.
-    //
-    // The deadline is soft: `work.cancel()` is cooperative, and
-    // LlamaSession.generate only observes cancellation between emitted tokens
-    // (never during prompt decode), so a worst-case overrun equals the
-    // remaining decode phase. Same characteristic as EditInterpreter's
-    // watchdog - acceptable for F3, documented so nobody mistakes it for a
-    // hard bound.
+    // Soft 15 s deadline. work.cancel() is cooperative: it cannot dequeue a
+    // call waiting for the LlamaRuntime actor (a summary or voice edit in
+    // flight runs to completion first), and LlamaSession only observes
+    // cancellation between emitted tokens - never during prompt decode. So
+    // the real bound on "Polishing…" is queue wait + prompt decode + one
+    // token; past the deadline the result is discarded and the dictation
+    // ships deterministic.
     private static let timeout: Duration = .seconds(15)
 
     static func polish(_ text: String) async -> String {
@@ -73,8 +70,10 @@ enum LLMPostProcessor {
             let raw = try await work.value
             watchdog.cancel()
             let cleaned = sanitize(raw)
-            guard !cleaned.isEmpty else {
-                log.warning("LLM returned empty output - shipping deterministic text")
+            // Backtick-only output is model garbage, same as empty - never
+            // let it replace the dictation.
+            guard !isFenceOnly(cleaned) else {
+                log.warning("LLM returned empty or fence-only output - shipping deterministic text")
                 return text
             }
             return cleaned
@@ -159,9 +158,19 @@ enum LLMPostProcessor {
         return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    // ~2x the input tokens at the ~4 chars/token rule of thumb, clamped so a
-    // one-liner still has room and a monologue can't run the context out.
+    // True for empty output and for output that is nothing but stray
+    // backticks and whitespace - a lone fence marker with no real content
+    // is model garbage, same as empty, and must never replace the
+    // dictation.
+    static func isFenceOnly(_ text: String) -> Bool {
+        text.allSatisfy { $0 == "`" || $0.isWhitespace }
+    }
+
+    // Generous output budget: ~4x the input tokens for Latin scripts and
+    // ~1.5x for dense scripts like CJK (Gemma tokenizes those at about 1-1.5
+    // chars/token, so count/2 silently truncated them). The 15 s watchdog,
+    // not this cap, is what actually bounds polish runtime.
     static func maxTokens(forInputLength count: Int) -> Int {
-        max(256, min(2000, count / 2))
+        max(256, min(2000, count))
     }
 }
