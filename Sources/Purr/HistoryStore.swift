@@ -99,16 +99,27 @@ final class HistoryStore: ObservableObject {
     // Writes <id>.wav in a detached task so transcription never waits on
     // disk I/O, then records the filename on the entry. A write failure
     // degrades that entry to text-only - dictation itself is unaffected.
-    func persistAudio(id: UUID, samples: [Float]) {
-        guard retentionProvider().maxAge != nil else { return }
+    // Returns the task so tests can await completion; callers may ignore it.
+    @discardableResult
+    func persistAudio(id: UUID, samples: [Float]) -> Task<Void, Never> {
+        guard retentionProvider().maxAge != nil else { return Task {} }
         let dir = audioDirectory
         let filename = "\(id.uuidString).wav"
-        Task.detached(priority: .utility) { [weak self] in
+        return Task.detached(priority: .utility) { [weak self] in
             do {
                 try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
                 try WAVFile.write(samples: samples, to: dir.appendingPathComponent(filename))
                 await MainActor.run { [weak self] in
-                    self?.update(id) { $0.audioFilename = filename }
+                    guard let self else { return }
+                    if self.entries.contains(where: { $0.id == id }) {
+                        self.update(id) { $0.audioFilename = filename }
+                    } else {
+                        // Entry vanished (deleted or FIFO-evicted) while the
+                        // write was in flight - remove the orphan, nothing
+                        // will ever reference it and the retention sweep only
+                        // visits files that known entries point at.
+                        try? FileManager.default.removeItem(at: dir.appendingPathComponent(filename))
+                    }
                 }
             } catch {
                 await MainActor.run { [weak self] in

@@ -94,4 +94,32 @@ struct HistoryStoreTests {
         #expect(store.entries.isEmpty)
         #expect(!FileManager.default.fileExists(atPath: store.audioDirectory.appendingPathComponent("gone.wav").path))
     }
+
+    @Test func evictionDeletesAudioFile() throws {
+        let (store, dir) = makeStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let a = entry(date: Date(timeIntervalSince1970: 0), audio: "a.wav")
+        try FileManager.default.createDirectory(at: store.audioDirectory, withIntermediateDirectories: true)
+        try WAVFile.write(samples: [0, 0.5], to: store.audioDirectory.appendingPathComponent("a.wav"))
+        store.add(a)
+        for i in 1...1000 {
+            store.add(entry(date: Date(timeIntervalSince1970: Double(i))))
+        }
+        #expect(!store.entries.contains(where: { $0.id == a.id }))
+        #expect(!FileManager.default.fileExists(atPath: store.audioDirectory.appendingPathComponent("a.wav").path))
+    }
+
+    @Test func persistAudioCleansUpWhenEntryVanishesMidWrite() async throws {
+        let (store, dir) = makeStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let e = entry()
+        store.add(e)
+        let task = store.persistAudio(id: e.id, samples: [Float](repeating: 0.25, count: 400))
+        store.delete(e.id)
+        await task.value
+        #expect(store.entries.isEmpty)
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: store.audioDirectory.appendingPathComponent("\(e.id.uuidString).wav").path))
+    }
 }
