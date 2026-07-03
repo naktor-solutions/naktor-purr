@@ -4,7 +4,9 @@ All notable changes to Barktor are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org).
 
-## [0.3.1] - 2026-07-03
+## [Unreleased]
+
+Work in progress toward 0.4.0. Not yet released.
 
 ### Fixed
 - The first transcription after switching to a Whisper engine could hang
