@@ -4,6 +4,23 @@ All notable changes to Barktor are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org).
 
+## [0.3.1] - 2026-07-03
+
+### Fixed
+- The first transcription after switching to a Whisper engine could hang
+  for many minutes. Loading a Whisper model runs a one-time Apple Neural
+  Engine compile; a missing guard let the background warm-up and the first
+  dictation compile the same model at once, thrashing the Neural Engine.
+  Warm-ups are now coalesced so the model compiles exactly once.
+
+### Added
+- Whisper models now warm up as soon as they finish downloading, so the
+  one-time Neural Engine compile happens under the download's own progress
+  instead of on your first dictation.
+- The status pill shows "Warming up…" instead of "Transcribing" while a
+  cold model is still loading, so a slow first run is no longer mistaken
+  for a stuck transcription.
+
 ## [0.3.0] - 2026-07-03
 
 ### Changed

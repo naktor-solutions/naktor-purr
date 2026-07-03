@@ -239,6 +239,16 @@ final class AppCoordinator: ObservableObject {
         Task { await engine.warmup() }
     }
 
+    // After a Whisper model finishes downloading (Settings), load and
+    // ANE-compile it now - under the download's own progress - rather than on
+    // the user's first dictation. No-op unless it's the active engine's model.
+    func warmupDownloadedModel(_ modelName: String) {
+        guard SettingsStore.shared.engine == .whisper,
+            SettingsStore.shared.modelName == modelName
+        else { return }
+        Task { await engine.warmup() }
+    }
+
     func reinstallHotkey() {
         installHotkeys()
     }
@@ -849,7 +859,12 @@ final class AppCoordinator: ObservableObject {
                 mode: .batch, status: .interrupted, errorMessage: nil, audioFilename: nil))
         HistoryStore.shared.persistAudio(id: entryID, samples: samples)
         state = .transcribing
-        hud.show(.transcribing)
+        // A cold engine loads and ANE-compiles the model inside transcribe(),
+        // which can take minutes on a first run. Show "Warming up…" for that
+        // instead of a misleading "Transcribing"; an already-warm engine goes
+        // straight to "Transcribing".
+        let needsWarmup = !(await engine.isWarm())
+        hud.show(needsWarmup ? .warmingUp : .transcribing)
 
         // DC-removal + peak-normalise to a sane level before handing off to
         // the engine. Parakeet TDT is trained on broadcast-loud speech and
@@ -864,6 +879,10 @@ final class AppCoordinator: ObservableObject {
         let micWasVeryQuiet = prepared.originalPeakDbFS < -45
 
         do {
+            if needsWarmup {
+                await engine.warmup()
+                hud.show(.transcribing)
+            }
             let raw = try await engine.transcribe(samples: prepared.samples)
             let processed = makePostProcessor().apply(raw)
             // Optional LLM pass, after the deterministic pipeline ("scratch

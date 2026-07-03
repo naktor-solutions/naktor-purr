@@ -54,6 +54,8 @@ final class ParakeetEngine: TranscriptionEngine {
     // live. 160 ms is the fallback if a future user complains about lag.
     private static let streamingChunk: StreamingChunkSize = .ms320
 
+    func isWarm() async -> Bool { batchManager != nil }
+
     func warmup() async {
         do {
             try await downloadAndLoadBatchManager()

@@ -15,20 +15,46 @@ final class WhisperEngine: TranscriptionEngine {
 
     private var pipe: WhisperKit?
     private var loadedModel: String?
+    // The single in-flight warmup. Loading a Whisper model runs the CoreML
+    // Apple-Neural-Engine specialization (`prewarm`), a multi-minute one-time
+    // compile for large-v3. reloadEngine() fires a background warmup the moment
+    // the user switches to Whisper; without coalescing, the first dictation's
+    // transcribe() starts a SECOND prewarm+load while that one is still running,
+    // and two concurrent large-v3 ANE compiles thrash the single compiler into a
+    // ~20-minute stall. Both callers await this one task instead. Mirrors
+    // ParakeetEngine.batchLoadTask.
+    private var warmupTask: Task<Void, Never>?
     private let log = Logger(subsystem: "com.naktor.barktor", category: "whisper")
 
     init(modelName: String) {
         self.modelIdentifier = modelName
     }
 
-    // Pre-load the model so the first dictation doesn't pay the disk-load
-    // cost. Safe to call multiple times - same-model warmups are no-ops.
+    // Pre-load the model so the first dictation doesn't pay the disk-load and
+    // ANE-compile cost. Safe to call multiple times - same-model warmups are
+    // no-ops, and concurrent calls coalesce onto one load (see warmupTask).
     // If the weights aren't on disk, this fails-soft (logs and returns)
     // rather than triggering a background download - the Settings UI is
     // the only path that pulls models, so it can show progress and surface
     // failures inline.
     func warmup() async {
         if loadedModel == modelIdentifier, pipe != nil { return }
+        if let inFlight = warmupTask {
+            await inFlight.value
+            return
+        }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.loadPipe()
+        }
+        warmupTask = task
+        defer { if warmupTask == task { warmupTask = nil } }
+        await task.value
+    }
+
+    func isWarm() async -> Bool { loadedModel == modelIdentifier && pipe != nil }
+
+    private func loadPipe() async {
         do {
             let folder = try await ModelManager.localFolder(for: modelIdentifier)
             let cfg = WhisperKitConfig(

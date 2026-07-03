@@ -282,6 +282,7 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .onAppear {
             modelVM.refreshInstalled()
+            modelVM.onDownloaded = { [weak coordinator] in coordinator?.warmupDownloadedModel($0) }
             eouInstalled = ParakeetEngine.eouIsInstalled()
             diarizerVM.refresh()
         }
@@ -1115,6 +1116,10 @@ final class ModelPickerViewModel: ObservableObject {
     // across tab switches.
     @Published var errors: [String: String] = [:]
 
+    // Fired after a successful download so the coordinator can warm the model
+    // if it's the active one (see AppCoordinator.warmupDownloadedModel).
+    var onDownloaded: ((String) -> Void)?
+
     func refreshInstalled() {
         installed = Set(ModelManager.curatedModels.map(\.id).filter { ModelManager.isInstalled($0) })
     }
@@ -1129,6 +1134,7 @@ final class ModelPickerViewModel: ObservableObject {
                 }
                 self.progress[modelName] = nil
                 self.refreshInstalled()
+                self.onDownloaded?(modelName)
             } catch {
                 self.progress[modelName] = nil
                 self.errors[modelName] = friendlyDownloadError(error)

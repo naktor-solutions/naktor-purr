@@ -10,6 +10,10 @@ protocol TranscriptionEngine: AnyObject {
     var supportsStreaming: Bool { get }
 
     func warmup() async
+    // True once the model is resident and transcribe() won't pay the load /
+    // ANE-compile cost. Lets the UI show "Warming up…" instead of a misleading
+    // "Transcribing" during a cold first run.
+    func isWarm() async -> Bool
     func transcribe(samples: [Float]) async throws -> String
     // Batch transcription that also carries per-token timings, for callers
     // (meeting mode) that align text against diarized speaker segments.
