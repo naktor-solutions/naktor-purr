@@ -34,7 +34,7 @@ final class HistoryStore: ObservableObject {
     // a retention without touching the developer's real UserDefaults.
     var retentionProvider: () -> AudioRetention = { .week }
 
-    private let log = Logger(subsystem: "com.arunbrahma.purr", category: "history")
+    private let log = Logger(subsystem: "com.naktor.purr", category: "history")
     private var sweepTask: Task<Void, Never>?
     private static let maxEntries = 1000
 
@@ -225,7 +225,7 @@ final class HistoryStore: ObservableObject {
         let bak = directory.appendingPathComponent("history.json.bak")
         try? FileManager.default.removeItem(at: bak)
         try? FileManager.default.moveItem(at: url, to: bak)
-        Logger(subsystem: "com.arunbrahma.purr", category: "history")
+        Logger(subsystem: "com.naktor.purr", category: "history")
             .error("history.json was corrupt - moved to history.json.bak, starting empty")
         return []
     }

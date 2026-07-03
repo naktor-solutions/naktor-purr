@@ -150,11 +150,11 @@ final class AppCoordinator: ObservableObject {
     // can drive the same code path as the status-bar Quit menu item.
     private var onQuit: (() -> Void)?
 
-    private let log = Logger(subsystem: "com.arunbrahma.purr", category: "coordinator")
+    private let log = Logger(subsystem: "com.naktor.purr", category: "coordinator")
     // Streaming post-processing trace, kept on its own category so the
     // per-utterance flow can be followed without the coordinator's
     // state-transition noise. Same category as PostProcessor's own logs.
-    private let postLog = Logger(subsystem: "com.arunbrahma.purr", category: "postprocess")
+    private let postLog = Logger(subsystem: "com.naktor.purr", category: "postprocess")
 
     func setMenuActions(quit: @escaping () -> Void) {
         self.onQuit = quit

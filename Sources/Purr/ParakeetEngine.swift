@@ -46,7 +46,7 @@ final class ParakeetEngine: TranscriptionEngine {
     // auto-download too. `eouDownloadActive` gates late progress callbacks.
     var onEOUProgress: ((Double?) -> Void)?
     private var eouDownloadActive = false
-    private let log = Logger(subsystem: "com.arunbrahma.purr", category: "parakeet")
+    private let log = Logger(subsystem: "com.naktor.purr", category: "parakeet")
 
     // 320 ms is the documented sweet spot per FluidAudio's own benchmark
     // table (4.88 % WER on LibriSpeech test-clean vs 8.23 % at 160 ms),
@@ -309,7 +309,7 @@ final class StreamingEouAsrSession: StreamingSession {
     private let manager: StreamingEouAsrManager
     private let inputFormat: AVAudioFormat
     private let diff = PartialDiff()
-    private let log = Logger(subsystem: "com.arunbrahma.purr", category: "parakeet.eou")
+    private let log = Logger(subsystem: "com.naktor.purr", category: "parakeet.eou")
 
     init(manager: StreamingEouAsrManager) {
         self.manager = manager

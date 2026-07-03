@@ -18,8 +18,8 @@ import IOKit.hid
 // ad-hoc-signed binary multiple times, prior grants can become stale -
 // they're attached to a code signature designation that no longer matches
 // the running app. The user has to remove the old entry from System
-// Settings (or run `tccutil reset Accessibility com.arunbrahma.purr`
-// and `tccutil reset ListenEvent com.arunbrahma.purr`) and grant
+// Settings (or run `tccutil reset Accessibility com.naktor.purr`
+// and `tccutil reset ListenEvent com.naktor.purr`) and grant
 // again.
 enum Permissions {
     enum Kind: String, CaseIterable, Identifiable {

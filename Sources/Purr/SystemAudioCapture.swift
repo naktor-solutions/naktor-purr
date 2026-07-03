@@ -45,8 +45,8 @@ final class SystemAudioCapture {
     private var levelContinuation: AsyncStream<Float>.Continuation?
     private(set) var levels: AsyncStream<Float> = AsyncStream { _ in }
     private let queue = DispatchQueue(
-        label: "com.arunbrahma.purr.systemaudio", qos: .userInitiated)
-    private let log = Logger(subsystem: "com.arunbrahma.purr", category: "systemaudio")
+        label: "com.naktor.purr.systemaudio", qos: .userInitiated)
+    private let log = Logger(subsystem: "com.naktor.purr", category: "systemaudio")
 
     // Peak magnitude below this (~-60 dBFS) means the tap delivered effectively
     // only silence. The usual cause is a denied "System Audio Recording"

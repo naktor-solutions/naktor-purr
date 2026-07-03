@@ -16,6 +16,12 @@
 
 Local voice-to-text dictation for macOS Apple Silicon. A free, MIT-licensed alternative to paid commercial dictation apps, with no telemetry and no cloud round-trips.
 
+> This is [Naktor](https://naktor.com)'s fork of [Purr by Arun Brahma](https://github.com/iamarunbrahma/purr), which we build on and evolve independently. See [CHANGELOG.md](CHANGELOG.md) for what we've added.
+
+## Install
+
+Download `Purr.dmg` from the [latest release](https://github.com/naktor-solutions/naktor-purr/releases/latest), drag Purr to Applications, then **right-click → Open** the first time (builds are not notarized by Apple). Updates after that are one click from **About Purr > Update**.
+
 ## Screenshots
 
 <table>
@@ -44,8 +50,8 @@ Local voice-to-text dictation for macOS Apple Silicon. A free, MIT-licensed alte
 ## QuickStart
 
 ```bash
-git clone https://github.com/iamarunbrahma/purr.git
-cd purr
+git clone https://github.com/naktor-solutions/naktor-purr.git
+cd naktor-purr
 make app
 mv dist/Purr.app /Applications/
 open /Applications/Purr.app
@@ -183,7 +189,7 @@ To uninstall completely, quit Purr, drag `Purr.app` to the Trash, then remove it
 
 ```bash
 rm -rf ~/Library/Application\ Support/Purr   # models + meeting transcripts
-defaults delete com.arunbrahma.purr          # preferences
+defaults delete com.naktor.purr              # preferences
 ```
 
 macOS can't run cleanup code when an app is dragged to the Trash, so those are the only leftovers. Because every model now lives under that single folder, app-cleaner utilities that search for "Purr" find all of it too.

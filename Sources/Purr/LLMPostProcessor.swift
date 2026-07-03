@@ -27,7 +27,7 @@ enum LLMPostProcessLevel: String, Codable, CaseIterable, Identifiable {
 }
 
 enum LLMPostProcessor {
-    private static let log = Logger(subsystem: "com.arunbrahma.purr", category: "llm-postprocess")
+    private static let log = Logger(subsystem: "com.naktor.purr", category: "llm-postprocess")
 
     // Soft 15 s deadline. work.cancel() is cooperative: it cannot dequeue a
     // call waiting for the LlamaRuntime actor (a summary or voice edit in

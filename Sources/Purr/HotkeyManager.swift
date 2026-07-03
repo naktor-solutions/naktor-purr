@@ -40,7 +40,7 @@ final class HotkeyManager {
     private var heldDown: [Action: Bool] = [:]
     private var dictationSuspended = false
 
-    private let log = Logger(subsystem: "com.arunbrahma.purr", category: "hotkey")
+    private let log = Logger(subsystem: "com.naktor.purr", category: "hotkey")
 
     // Right-side modifier device codes (NSEvent.keyCode for modifier-only
     // flagsChanged events). Carbon's kVK_* constants don't distinguish

@@ -32,7 +32,7 @@ enum AXSelection {
         }
     }
 
-    private static let log = Logger(subsystem: "com.arunbrahma.purr", category: "ax")
+    private static let log = Logger(subsystem: "com.naktor.purr", category: "ax")
 
     // Returns the currently selected string in the focused element, or
     // throws if no selection / AX denied / element doesn't expose it.

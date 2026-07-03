@@ -62,7 +62,7 @@ final class MeetingSummarizer {
         case none
     }
 
-    private let log = Logger(subsystem: "com.arunbrahma.purr", category: "summarizer")
+    private let log = Logger(subsystem: "com.naktor.purr", category: "summarizer")
 
     // Hard ceiling on transcript characters fed to the model. Longer
     // meetings get a head/tail truncation (the most useful content for a

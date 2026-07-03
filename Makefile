@@ -7,7 +7,7 @@
 # code-signs it so the OS will route TCC prompts to it.
 
 APP_NAME      := Purr
-BUNDLE_ID     := com.arunbrahma.purr
+BUNDLE_ID     := com.naktor.purr
 CONFIG        := release
 BUILD_DIR     := .build
 APP_DIR       := dist/$(APP_NAME).app
@@ -80,6 +80,9 @@ app:
 	@cp $(INFO_PLIST) $(CONTENTS)/Info.plist
 	@cp Resources/AppIcon.icns $(RES_DIR)/AppIcon.icns
 	@cp Resources/purr_menubar_glyph.pdf $(RES_DIR)/purr_menubar_glyph.pdf
+	@# Ship the changelog so About > What's New always matches the installed
+	@# version.
+	@cp CHANGELOG.md $(RES_DIR)/CHANGELOG.md
 	@# Embed llama.cpp dynamic framework. -R preserves the Headers ->
 	@# Versions/Current/Headers symlinks; dereferencing them (cp -RHL)
 	@# flattens the framework into a layout codesign rejects as

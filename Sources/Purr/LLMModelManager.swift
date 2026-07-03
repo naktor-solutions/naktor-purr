@@ -15,7 +15,7 @@ import os.log
 // model's functionality through a UI; the Settings panel renders that
 // notice inline before triggering a download.
 enum LLMModelManager {
-    private static let log = Logger(subsystem: "com.arunbrahma.purr", category: "llm-models")
+    private static let log = Logger(subsystem: "com.naktor.purr", category: "llm-models")
 
     static let defaultModelFilename = "gemma-3-4b-it-Q4_K_M.gguf"
     static let defaultModelLabel = "Gemma 3 4B Instruct (Q4_K_M)"

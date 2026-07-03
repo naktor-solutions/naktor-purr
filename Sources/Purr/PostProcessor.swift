@@ -14,9 +14,9 @@ struct PostProcessor {
     // Debug-level instrumentation so the filler/voice-command/dictionary
     // passes can be observed live (including from the Smart Typing path,
     // which calls apply() once per utterance). Watch with:
-    //   log stream --predicate 'subsystem == "com.arunbrahma.purr"
+    //   log stream --predicate 'subsystem == "com.naktor.purr"
     //   AND category == "postprocess"' --level debug
-    private let log = Logger(subsystem: "com.arunbrahma.purr", category: "postprocess")
+    private let log = Logger(subsystem: "com.naktor.purr", category: "postprocess")
 
     func apply(_ raw: String) -> ProcessResult {
         var text = raw

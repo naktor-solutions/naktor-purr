@@ -1443,7 +1443,7 @@ final class LLMSummaryViewModel: ObservableObject {
     }
 
     func delete() {
-        let log = Logger(subsystem: "com.arunbrahma.purr", category: "summarizer")
+        let log = Logger(subsystem: "com.naktor.purr", category: "summarizer")
         log.info("Gemma delete: starting.")
 
         let appleFallbackUsable: Bool

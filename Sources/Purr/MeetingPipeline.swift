@@ -53,7 +53,7 @@ final class MeetingPipeline: ObservableObject {
     // (no buffers delivered during silence) fades the waveform back to rest.
     private static let systemLevelDecay: Float = 0.8
 
-    private let log = Logger(subsystem: "com.arunbrahma.purr", category: "meeting")
+    private let log = Logger(subsystem: "com.naktor.purr", category: "meeting")
 
     init(
         hud: RecordingHUD,

@@ -15,7 +15,7 @@ import os.log
 @MainActor
 final class Diarizer {
     private var manager: OfflineDiarizerManager?
-    private let log = Logger(subsystem: "com.arunbrahma.purr", category: "diarizer")
+    private let log = Logger(subsystem: "com.naktor.purr", category: "diarizer")
 
     func warmup() async {
         if manager != nil { return }

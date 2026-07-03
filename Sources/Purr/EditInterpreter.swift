@@ -56,7 +56,7 @@ enum EditInterpreter {
     }
 
     private static let log = Logger(
-        subsystem: "com.arunbrahma.purr", category: "edit-interpreter")
+        subsystem: "com.naktor.purr", category: "edit-interpreter")
 
     static var isAvailable: Bool {
         appleFoundationReady || LLMModelManager.isInstalled()

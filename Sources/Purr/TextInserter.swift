@@ -13,7 +13,7 @@ import os.log
 // Paste avoids all of that and is the same trick BetterTouchTool, Raycast,
 // and the dictation reference apps use.
 final class TextInserter {
-    private let log = Logger(subsystem: "com.arunbrahma.purr", category: "paste")
+    private let log = Logger(subsystem: "com.naktor.purr", category: "paste")
 
     // V on a US ANSI keyboard.
     private let kVKey: CGKeyCode = 9

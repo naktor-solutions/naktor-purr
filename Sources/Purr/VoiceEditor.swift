@@ -33,7 +33,7 @@ final class VoiceEditor {
     private var isActive = false
     private var recordingStartedAt: Date?
 
-    private let log = Logger(subsystem: "com.arunbrahma.purr", category: "voice-edit")
+    private let log = Logger(subsystem: "com.naktor.purr", category: "voice-edit")
 
     init(hud: RecordingHUD, engineProvider: @escaping () -> any TranscriptionEngine) {
         self.hud = hud

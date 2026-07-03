@@ -8,7 +8,7 @@ import os.log
 //   - the location survives `defaults delete` and Xcode-cache cleaning
 //   - a future "import model from file" flow has a documented home for them.
 enum ModelManager {
-    private static let log = Logger(subsystem: "com.arunbrahma.purr", category: "models")
+    private static let log = Logger(subsystem: "com.naktor.purr", category: "models")
 
     // Whisper Large V3 Turbo: 4 decoder layers (vs 32 in Large V3),
     // ~6× decode speed. The `_632MB` suffix selects argmax's quantised

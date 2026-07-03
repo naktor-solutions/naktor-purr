@@ -14,7 +14,7 @@ import os.log
 // boundaries. We rewrite FluidAudio's stable speaker IDs ("speaker_0001") to
 // display labels ("Speaker 1") in the order they first speak.
 enum MeetingDocument {
-    private static let log = Logger(subsystem: "com.arunbrahma.purr", category: "meetingdoc")
+    private static let log = Logger(subsystem: "com.naktor.purr", category: "meetingdoc")
 
     struct Output {
         let markdown: String

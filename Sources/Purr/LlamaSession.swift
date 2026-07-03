@@ -75,7 +75,7 @@ final class LlamaSession {
         var nBatch: UInt32 = 512
     }
 
-    private let log = Logger(subsystem: "com.arunbrahma.purr", category: "llama")
+    private let log = Logger(subsystem: "com.naktor.purr", category: "llama")
     private let model: OpaquePointer
     private let vocab: OpaquePointer
     private let context: OpaquePointer
