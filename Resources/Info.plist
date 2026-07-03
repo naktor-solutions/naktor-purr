@@ -36,5 +36,7 @@
 	<string>Barktor, by Naktor. MIT licensed open source.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Barktor records your voice locally to transcribe it into text. Audio never leaves your Mac.</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
 </dict>
 </plist>

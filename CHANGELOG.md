@@ -17,6 +17,13 @@ All notable changes to Barktor are documented here. The format follows
 - The DMG install window was redrawn for Barktor and is now sharp on
   Retina displays.
 
+### Fixed
+- The menu bar icon could fail to appear at all on macOS Tahoe (the app had
+  no main menu, which can orphan the status item). Ported from upstream Purr.
+- A hung transcription (CoreML never returning) no longer pins the HUD on
+  "Transcribing" forever; it now stops with a clear error after a generous,
+  audio-proportional timeout. Ported from upstream Purr.
+
 ### Added
 - New Barktor app icon and menu-bar glyph.
 - One-time migration from a 0.2.x Purr install: settings, dictation
