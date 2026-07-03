@@ -103,7 +103,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let win = NSWindow(contentViewController: host)
         win.title = "About Barktor"
         win.styleMask = [.titled, .closable]
-        win.setContentSize(NSSize(width: 380, height: 320))
+        win.setContentSize(NSSize(width: 380, height: 332))
         win.center()
         win.isReleasedWhenClosed = false
         win.makeKeyAndOrderFront(nil)
