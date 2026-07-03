@@ -54,7 +54,7 @@ final class AudioRecorder: @unchecked Sendable {
     // Push-to-talk recorders (dictation, voice edit) opt in; see stop(). Meeting leaves false.
     var allowsWarmKeeping = false
     private var idleTeardownItem: DispatchWorkItem?
-    private static let warmWindow: TimeInterval = 60  // mic stays warm this long after stop()
+    private static let warmWindow: TimeInterval = 5  // mic stays warm this long after stop() (Parakey-style short window)
     private var openedDeviceID = AudioDeviceID(0)
     // Decided at open time from the device actually in use: only stable wired inputs are
     // warm-kept. Bluetooth (often surfaced as an aggregate/virtual device whose transport
@@ -177,14 +177,14 @@ final class AudioRecorder: @unchecked Sendable {
         reconfigureItem?.cancel()
         reconfigureItem = nil
 
-        // Keep the mic warm for a window after each recording so a follow-up
-        // press is instant, then release it (and the orange mic indicator) once
-        // idle. warmWindow (60 s) is long enough to cover the natural pauses
-        // between dictations without pinning the indicator on permanently - a
-        // longer/indefinite hold makes the "mic in use" dot look like the app is
-        // always listening, which a local-only dictation app must avoid. Only
-        // warm-eligible wired/built-in devices qualify; Bluetooth/aggregate
-        // release immediately so HFP mode is never pinned.
+        // Keep the mic warm for a short window after each recording so rapid
+        // back-to-back presses are instant, then release it (and the orange mic
+        // indicator) once idle. warmWindow is deliberately short (5 s, matching
+        // Parakey) - long enough to bridge quick successive dictations, short
+        // enough that the "mic in use" dot disappears almost as soon as you stop,
+        // which a local-only dictation app must respect. Only warm-eligible
+        // wired/built-in devices qualify; Bluetooth/aggregate release immediately
+        // so HFP mode is never pinned.
         if allowsWarmKeeping, unit != nil, warmEligible {
             scheduleIdleTeardown()
         } else {
