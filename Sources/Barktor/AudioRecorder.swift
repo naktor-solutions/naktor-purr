@@ -45,10 +45,16 @@ final class AudioRecorder: @unchecked Sendable {
     // Streaming engines pipe these into their session; batch engines use stop().
     private(set) var chunks: AsyncStream<[Float]> = AsyncStream { _ in }
 
+    // The user's chosen input-device UID ("" / nil = system default), read at open
+    // time. A static provider (set once by AppCoordinator from SettingsStore) so all
+    // recorder instances - dictation, voice edit, meeting - honor the choice without
+    // per-instance plumbing, and without coupling AudioRecorder to SettingsStore.
+    static var preferredInputUID: () -> String? = { nil }
+
     // Push-to-talk recorders (dictation, voice edit) opt in; see stop(). Meeting leaves false.
     var allowsWarmKeeping = false
     private var idleTeardownItem: DispatchWorkItem?
-    private static let warmWindow: TimeInterval = 10  // mic stays warm this long after stop()
+    private static let warmWindow: TimeInterval = 60  // mic stays warm this long after stop()
     private var openedDeviceID = AudioDeviceID(0)
     // Decided at open time from the device actually in use: only stable wired inputs are
     // warm-kept. Bluetooth (often surfaced as an aggregate/virtual device whose transport
@@ -99,8 +105,9 @@ final class AudioRecorder: @unchecked Sendable {
         idleTeardownItem = nil
 
         // A warm unit that's now pointed at a stale device (the user switched the
-        // system default while we idled) must be reopened on the new one.
-        if unit != nil, openedDeviceID != Self.currentDefaultInputDeviceID() {
+        // system default, or changed the pinned mic in Settings, while we idled) must
+        // be reopened on the new target.
+        if unit != nil, openedDeviceID != Self.targetInputDeviceID() {
             teardownAUHAL()
         }
 
@@ -170,8 +177,14 @@ final class AudioRecorder: @unchecked Sendable {
         reconfigureItem?.cancel()
         reconfigureItem = nil
 
-        // Keep the mic warm for a short window so the next press is instant, unless this
-        // recorder didn't opt in or the device isn't warm-eligible (Bluetooth/aggregate).
+        // Keep the mic warm for a window after each recording so a follow-up
+        // press is instant, then release it (and the orange mic indicator) once
+        // idle. warmWindow (60 s) is long enough to cover the natural pauses
+        // between dictations without pinning the indicator on permanently - a
+        // longer/indefinite hold makes the "mic in use" dot look like the app is
+        // always listening, which a local-only dictation app must avoid. Only
+        // warm-eligible wired/built-in devices qualify; Bluetooth/aggregate
+        // release immediately so HFP mode is never pinned.
         if allowsWarmKeeping, unit != nil, warmEligible {
             scheduleIdleTeardown()
         } else {
@@ -272,17 +285,12 @@ final class AudioRecorder: @unchecked Sendable {
                 au, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Output, 0, &disable,
                 UInt32(MemoryLayout<UInt32>.size)), "EnableIO(output)")
 
-        // Point at the system default input device (settable only after EnableIO).
-        var deviceID = AudioDeviceID(0)
-        var idSize = UInt32(MemoryLayout<AudioDeviceID>.size)
-        var defAddr = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultInputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        try check(
-            AudioObjectGetPropertyData(
-                AudioObjectID(kAudioObjectSystemObject), &defAddr, 0, nil, &idSize, &deviceID),
-            "DefaultInputDevice")
+        // Point at the chosen input device - the user's pinned mic if present, else
+        // the system default (settable only after EnableIO).
+        var deviceID = Self.targetInputDeviceID()
+        guard deviceID != 0 else {
+            throw AudioError.auhalSetup(selector: "targetInputDevice", status: -1)
+        }
         try check(
             AudioUnitSetProperty(
                 au, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &deviceID,
@@ -413,6 +421,82 @@ final class AudioRecorder: @unchecked Sendable {
         return deviceID
     }
 
+    // The device to open: the user's pinned mic (by stable UID) when it's currently
+    // present, otherwise the system default. Resolving by UID keeps the choice valid
+    // across reconnects/reboots (AudioDeviceIDs are not stable), and the fallback means
+    // a disconnected pinned device degrades to the default instead of failing.
+    private static func targetInputDeviceID() -> AudioDeviceID {
+        if let uid = preferredInputUID(), !uid.isEmpty, let dev = deviceID(forUID: uid) {
+            return dev
+        }
+        return currentDefaultInputDeviceID()
+    }
+
+    // (uid, name) for every device exposing at least one input channel. Drives the
+    // Settings microphone picker.
+    static func availableInputDevices() -> [(uid: String, name: String)] {
+        inputDeviceIDs().compactMap { id in
+            guard let uid = cfStringProperty(id, kAudioDevicePropertyDeviceUID) else { return nil }
+            return (uid, cfStringProperty(id, kAudioObjectPropertyName) ?? "Unknown")
+        }
+    }
+
+    private static func deviceID(forUID uid: String) -> AudioDeviceID? {
+        inputDeviceIDs().first { cfStringProperty($0, kAudioDevicePropertyDeviceUID) == uid }
+    }
+
+    private static func inputDeviceIDs() -> [AudioDeviceID] {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard
+            AudioObjectGetPropertyDataSize(
+                AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size) == noErr, size > 0
+        else { return [] }
+        let count = Int(size) / MemoryLayout<AudioDeviceID>.size
+        var ids = [AudioDeviceID](repeating: 0, count: count)
+        guard
+            AudioObjectGetPropertyData(
+                AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &ids) == noErr
+        else { return [] }
+        return ids.filter { hasInputChannels($0) }
+    }
+
+    private static func hasInputChannels(_ id: AudioDeviceID) -> Bool {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreamConfiguration,
+            mScope: kAudioObjectPropertyScopeInput,
+            mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(id, &addr, 0, nil, &size) == noErr, size > 0 else {
+            return false
+        }
+        let raw = UnsafeMutableRawPointer.allocate(
+            byteCount: Int(size), alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { raw.deallocate() }
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, raw) == noErr else { return false }
+        let abl = UnsafeMutableAudioBufferListPointer(
+            raw.assumingMemoryBound(to: AudioBufferList.self))
+        return abl.contains { $0.mNumberChannels > 0 }
+    }
+
+    private static func cfStringProperty(
+        _ id: AudioDeviceID, _ selector: AudioObjectPropertySelector
+    ) -> String? {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var value: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &value) == noErr,
+            let cf = value?.takeRetainedValue()
+        else { return nil }
+        return cf as String
+    }
+
     private static func nominalSampleRate(of deviceID: AudioDeviceID) -> Double {
         guard deviceID != 0 else { return 0 }
         var rate: Float64 = 0
@@ -527,13 +611,13 @@ final class AudioRecorder: @unchecked Sendable {
         // timer releases the warm unit. Rebuilding here would cancel that idle timer and
         // strand the unit (orange indicator stuck on).
         guard recording else { return }
-        let newDefault = Self.currentDefaultInputDeviceID()
+        let newTarget = Self.targetInputDeviceID()
         let boundRate = Self.nominalSampleRate(of: openedDeviceID)
         let changed =
-            newDefault != openedDeviceID || (boundRate > 0 && abs(boundRate - deviceSampleRate) > 1)
+            newTarget != openedDeviceID || (boundRate > 0 && abs(boundRate - deviceSampleRate) > 1)
         guard changed else { return }
         log.info(
-            "Audio device/format change - reconfiguring AUHAL (device \(self.openedDeviceID, privacy: .public)→\(newDefault, privacy: .public), boundRate=\(boundRate, privacy: .public), expected=\(self.deviceSampleRate, privacy: .public))"
+            "Audio device/format change - reconfiguring AUHAL (device \(self.openedDeviceID, privacy: .public)→\(newTarget, privacy: .public), boundRate=\(boundRate, privacy: .public), expected=\(self.deviceSampleRate, privacy: .public))"
         )
         reconfigure(attempt: 1)
     }
@@ -547,7 +631,7 @@ final class AudioRecorder: @unchecked Sendable {
     //      returns kAudioUnitErr_NoConnection on every callback - caught by the
     //      liveness check below, which rebuilds.
     private func reconfigure(attempt: Int) {
-        let target = Self.currentDefaultInputDeviceID()
+        let target = Self.targetInputDeviceID()
         if Self.nominalSampleRate(of: target) == 0, attempt < Self.reconfigureMaxAttempts {
             log.info(
                 "Reconfigure: device \(target, privacy: .public) not ready (attempt \(attempt, privacy: .public)); waiting."

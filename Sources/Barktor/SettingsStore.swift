@@ -15,6 +15,7 @@ final class SettingsStore: ObservableObject {
         static let hotkeyKeyCode = "hotkey.keyCode"
         static let hotkeyModifiers = "hotkey.modifiers"
         static let hotkeyMode = "hotkey.mode"
+        static let inputDeviceUID = "audio.inputDeviceUID"
         static let meetingHotkeyKey = "hotkey.meeting.keyCode"
         static let meetingHotkeyMod = "hotkey.meeting.modifiers"
         static let voiceEditKey = "hotkey.edit.keyCode"
@@ -96,6 +97,14 @@ final class SettingsStore: ObservableObject {
 
     @Published var hotkeyMode: HotkeyMode {
         didSet { defaults.set(hotkeyMode.rawValue, forKey: Keys.hotkeyMode) }
+    }
+
+    // Stable UID of the input device to record from; "" means the system default.
+    // A UID (not an AudioDeviceID) so the choice survives reconnects and reboots.
+    // AudioRecorder resolves it at open time and falls back to the default when
+    // the pinned device isn't currently present.
+    @Published var inputDeviceUID: String {
+        didSet { defaults.set(inputDeviceUID, forKey: Keys.inputDeviceUID) }
     }
 
     @Published var meetingHotkey: Hotkey {
@@ -289,6 +298,7 @@ final class SettingsStore: ObservableObject {
         )
         let storedMode = defaults.string(forKey: Keys.hotkeyMode) ?? HotkeyMode.holdToTalk.rawValue
         self.hotkeyMode = HotkeyMode(rawValue: storedMode) ?? .holdToTalk
+        self.inputDeviceUID = defaults.string(forKey: Keys.inputDeviceUID) ?? ""
         self.modelName = defaults.string(forKey: Keys.modelName) ?? ModelManager.defaultModel
         self.autoPaste = defaults.object(forKey: Keys.autoPaste) as? Bool ?? true
         self.onboardingDone = defaults.bool(forKey: Keys.onboardingDone)
@@ -367,6 +377,7 @@ final class SettingsStore: ObservableObject {
     func resetToDefaults() {
         hotkey = .defaultRightOption
         hotkeyMode = .holdToTalk
+        inputDeviceUID = ""
         meetingHotkey = .defaultMeeting
         voiceEditHotkey = .defaultVoiceEdit
         meetingEnabled = false

@@ -10,6 +10,13 @@ struct SettingsView: View {
     // the EOU card. The card downloads/deletes via the coordinator (so warm-up
     // and the button share one progress source) and writes the result back here.
     @State private var eouInstalled = ParakeetEngine.eouIsInstalled()
+
+    private struct InputDevice: Identifiable {
+        let uid: String
+        let name: String
+        var id: String { uid }
+    }
+    @State private var inputDevices: [InputDevice] = []
     // Shares the one Gemma model with the meeting summary section.
     @StateObject private var voiceEditLLM = LLMSummaryViewModel()
     @StateObject private var launchAtLogin = LaunchAtLogin()
@@ -98,6 +105,26 @@ struct SettingsView: View {
                     }
                 }
                 .controlSize(.small)
+            }
+
+            Section("Microphone") {
+                Picker("Input device", selection: $settings.inputDeviceUID) {
+                    Text("System Default").tag("")
+                    ForEach(inputDevices) { dev in
+                        Text(dev.name).tag(dev.uid)
+                    }
+                    // Keep a matching tag when the pinned device is absent so the picker
+                    // shows the choice instead of blanking, and preserves it for reconnect.
+                    if !settings.inputDeviceUID.isEmpty,
+                        !inputDevices.contains(where: { $0.uid == settings.inputDeviceUID }) {
+                        Text("Selected device (unavailable)").tag(settings.inputDeviceUID)
+                    }
+                }
+                .onAppear {
+                    inputDevices = AudioRecorder.availableInputDevices().map {
+                        InputDevice(uid: $0.uid, name: $0.name)
+                    }
+                }
             }
 
             Section("Automatic Insertion") {

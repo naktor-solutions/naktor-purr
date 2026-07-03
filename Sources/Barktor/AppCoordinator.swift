@@ -194,6 +194,10 @@ final class AppCoordinator: ObservableObject {
         // on Bluetooth to avoid pinning it to SCO mode.
         recorder.allowsWarmKeeping = true
 
+        // Every AudioRecorder (dictation, voice edit, meeting) opens the mic the user
+        // pinned in Settings; "" falls back to the system default.
+        AudioRecorder.preferredInputUID = { SettingsStore.shared.inputDeviceUID }
+
         HistoryStore.shared.retentionProvider = { SettingsStore.shared.historyAudioRetention }
         HistoryStore.shared.startDailySweeps()
 
