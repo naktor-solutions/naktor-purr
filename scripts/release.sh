@@ -20,6 +20,9 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 cd "$REPO_ROOT"
 
 SIGN_ID=${SIGN_ID:-"Purr Local Dev"}
+# Pin gh to origin's repo: with an upstream remote configured, gh otherwise
+# resolves ambiguously and can try to publish the release on the fork parent.
+REPO_SLUG=$(git remote get-url origin | sed -E 's#^(git@github.com:|https://github.com/)##; s#\.git$##')
 APP=dist/Purr.app
 DMG=dist/Purr.dmg
 DRY_RUN=false
@@ -115,6 +118,7 @@ fi
 git tag -a "$TAG" -m "Purr $VERSION"
 git push origin "$TAG"
 gh release create "$TAG" "$DMG" "$DMG.sha256" \
+  --repo "$REPO_SLUG" \
   --title "Purr $VERSION" \
   --notes-file "$NOTES" \
   --latest
