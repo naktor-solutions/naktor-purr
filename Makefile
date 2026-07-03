@@ -1,4 +1,4 @@
-# Build a runnable Purr.app bundle from the SwiftPM executable.
+# Build a runnable Barktor.app bundle from the SwiftPM executable.
 #
 # Why this Makefile exists: macOS gates the microphone, accessibility, and
 # input-monitoring permissions on a real .app bundle with a code signature
@@ -6,8 +6,8 @@
 # silently denies everything. This Makefile assembles a minimal .app and
 # code-signs it so the OS will route TCC prompts to it.
 
-APP_NAME      := Purr
-BUNDLE_ID     := com.naktor.purr
+APP_NAME      := Barktor
+BUNDLE_ID     := com.naktor.barktor
 CONFIG        := release
 BUILD_DIR     := .build
 APP_DIR       := dist/$(APP_NAME).app
@@ -33,7 +33,7 @@ INFO_PLIST    := Resources/Info.plist
 # `security find-identity -p codesigning -v`); the profile is created once with
 # `xcrun notarytool store-credentials`. Override either on the command line.
 DEV_ID         ?= Developer ID Application: Arun Brahma (5JCFRMC367)
-NOTARY_PROFILE ?= purr-app
+NOTARY_PROFILE ?= barktor-app
 # llama.cpp is shipped as an XCFramework binary target. SwiftPM stages
 # the macOS-arm64 slice next to the built executable; we copy that into
 # the bundle's Frameworks/ and add the rpath the executable needs to
@@ -50,7 +50,7 @@ LLAMA_FRAMEWORK_SRC := $(BUILD_DIR)/arm64-apple-macosx/$(CONFIG)/llama.framework
 DEVELOPER_DIR ?= /Applications/Xcode.app/Contents/Developer
 export DEVELOPER_DIR
 
-# PurrTests (Tests/PurrTests) uses Swift Testing (`import Testing`), not XCTest.
+# BarktorTests (Tests/BarktorTests) uses Swift Testing (`import Testing`), not XCTest.
 # Command Line Tools ships Testing.framework, but it lives at a fixed path
 # instead of inside a platform SDK, and `swift test` normally locates it by
 # asking `xcrun --show-sdk-platform-path` for the search path - a call that
@@ -79,7 +79,7 @@ app:
 	@cp $(BUILD_DIR)/arm64-apple-macosx/$(CONFIG)/$(APP_NAME) $(MACOS_DIR)/$(APP_NAME)
 	@cp $(INFO_PLIST) $(CONTENTS)/Info.plist
 	@cp Resources/AppIcon.icns $(RES_DIR)/AppIcon.icns
-	@cp Resources/purr_menubar_glyph.pdf $(RES_DIR)/purr_menubar_glyph.pdf
+	@cp Resources/barktor_menubar_glyph.pdf $(RES_DIR)/barktor_menubar_glyph.pdf
 	@# Ship the changelog so About > What's New always matches the installed
 	@# version.
 	@cp CHANGELOG.md $(RES_DIR)/CHANGELOG.md
@@ -183,7 +183,7 @@ dmg: notarize-app
 	@# Sidecar SHA-256 published alongside the DMG. The Updater fetches this
 	@# file from the GitHub release and verifies the downloaded DMG against it
 	@# BEFORE invoking the install helper. Computed last, on the stapled image,
-	@# so it matches what users download. Format is `<hex>  Purr.dmg\n`, matching
+	@# so it matches what users download. Format is `<hex>  Barktor.dmg\n`, matching
 	@# `shasum -a 256` output so anyone can `shasum -a 256 -c` it manually.
 	@shasum -a 256 "$(DMG)" | awk '{ printf "%s  $(APP_NAME).dmg\n", $$1 }' > $(DMG).sha256
 	@echo "Built $(DMG) ($$(du -h $(DMG) | cut -f1)) + $(DMG).sha256"

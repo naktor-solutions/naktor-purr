@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Cut a Purr release: build, sign, package a drag-install DMG with its SHA-256
+# Cut a Barktor release: build, sign, package a drag-install DMG with its SHA-256
 # sidecar, and publish a GitHub release whose notes are the CHANGELOG section
 # for the version in Resources/Info.plist.
 #
@@ -23,8 +23,8 @@ SIGN_ID=${SIGN_ID:-"Purr Local Dev"}
 # Pin gh to origin's repo: with an upstream remote configured, gh otherwise
 # resolves ambiguously and can try to publish the release on the fork parent.
 REPO_SLUG=$(git remote get-url origin | sed -E 's#^(git@github.com:|https://github.com/)##; s#\.git$##')
-APP=dist/Purr.app
-DMG=dist/Purr.dmg
+APP=dist/Barktor.app
+DMG=dist/Barktor.dmg
 DRY_RUN=false
 [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=true
 
@@ -63,23 +63,23 @@ fi
 # self-signed llama.framework).
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
-cp .build/arm64-apple-macosx/release/Purr "$APP/Contents/MacOS/Purr"
+cp .build/arm64-apple-macosx/release/Barktor "$APP/Contents/MacOS/Barktor"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
-cp Resources/purr_menubar_glyph.pdf "$APP/Contents/Resources/purr_menubar_glyph.pdf"
+cp Resources/barktor_menubar_glyph.pdf "$APP/Contents/Resources/barktor_menubar_glyph.pdf"
 cp CHANGELOG.md "$APP/Contents/Resources/CHANGELOG.md"
 cp -Rp .build/arm64-apple-macosx/release/llama.framework "$APP/Contents/Frameworks/llama.framework"
-install_name_tool -add_rpath @executable_path/../Frameworks "$APP/Contents/MacOS/Purr" 2>/dev/null || true
+install_name_tool -add_rpath @executable_path/../Frameworks "$APP/Contents/MacOS/Barktor" 2>/dev/null || true
 find "$APP" -name "*.cstemp" -delete
 
 codesign --force --sign "$SIGN_ID" "$APP/Contents/Frameworks/llama.framework"
-codesign --force --sign "$SIGN_ID" --entitlements Resources/Purr.entitlements "$APP"
+codesign --force --sign "$SIGN_ID" --entitlements Resources/Barktor.entitlements "$APP"
 codesign --verify --deep --strict "$APP"
 
 # --------------------------------------------------------------------- dmg
 # Same drag-install layout as the Makefile `dmg` target (pre-baked .DS_Store,
 # background, volume icon), minus notarization/stapling.
-STAGE=dist/dmg-stage MNT=dist/dmg-mnt RW=dist/Purr-rw.dmg
+STAGE=dist/dmg-stage MNT=dist/dmg-mnt RW=dist/Barktor-rw.dmg
 rm -rf "$DMG" "$RW" "$STAGE" "$MNT"
 mkdir -p "$STAGE/.background"
 cp -Rp "$APP" "$STAGE/"
@@ -87,7 +87,7 @@ cp Resources/dmg-launch-window.png "$STAGE/.background/background.png"
 cp Resources/dmg-DS_Store "$STAGE/.DS_Store"
 cp Resources/AppIcon.icns "$STAGE/.VolumeIcon.icns"
 ln -s /Applications "$STAGE/Applications"
-hdiutil create -volname "Purr" -srcfolder "$STAGE" -ov -format UDRW -fs HFS+ "$RW" >/dev/null
+hdiutil create -volname "Barktor" -srcfolder "$STAGE" -ov -format UDRW -fs HFS+ "$RW" >/dev/null
 mkdir -p "$MNT"
 hdiutil attach "$RW" -nobrowse -noverify -noautoopen -mountpoint "$MNT" >/dev/null
 SetFile -a C "$MNT" 2>/dev/null || true  # custom volume icon; cosmetic if SetFile is missing
@@ -98,7 +98,7 @@ rm -rf "$RW" "$STAGE"
 
 # Sidecar the in-app updater REQUIRES: it refuses to install a DMG without a
 # verified SHA-256. Format matches `shasum -a 256` so it can be checked by hand.
-shasum -a 256 "$DMG" | awk '{ printf "%s  Purr.dmg\n", $1 }' > "$DMG.sha256"
+shasum -a 256 "$DMG" | awk '{ printf "%s  Barktor.dmg\n", $1 }' > "$DMG.sha256"
 
 # ------------------------------------------------------------------- notes
 # Extract this version's CHANGELOG section (from its heading to the next one).
@@ -115,11 +115,11 @@ if $DRY_RUN; then
 fi
 
 # ----------------------------------------------------------------- publish
-git tag -a "$TAG" -m "Purr $VERSION"
+git tag -a "$TAG" -m "Barktor $VERSION"
 git push origin "$TAG"
 gh release create "$TAG" "$DMG" "$DMG.sha256" \
   --repo "$REPO_SLUG" \
-  --title "Purr $VERSION" \
+  --title "Barktor $VERSION" \
   --notes-file "$NOTES" \
   --latest
 echo "Released $TAG"

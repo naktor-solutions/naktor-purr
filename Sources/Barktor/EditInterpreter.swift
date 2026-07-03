@@ -1,0 +1,454 @@
+import Foundation
+import os.log
+
+#if canImport(FoundationModels) && !NO_APPLE_FM
+import FoundationModels
+#endif
+
+// Interprets a spoken instruction against a selected passage and returns the
+// edited text. Any phrasing works because an on-device LLM does the
+// interpreting.
+//
+// Surgical by construction. The model never emits the edited passage directly
+// for a targeted edit - it names find/replace spans and `applyPlan` performs
+// the substitution in Swift, so untouched text cannot change. A whole-passage
+// rewrite ("make this concise") is the one case the model returns full text.
+//
+// Both backends are asked for the same fenced text protocol; `parsePlan`
+// decodes it. Voice Edit requires an LLM backend.
+// Apple Foundation Models (macOS 26+) is preferred; Gemma 3 4B via llama.cpp
+// is the macOS 14-25 path, sharing the weights the meeting summariser uses.
+@MainActor
+enum EditInterpreter {
+    // Largest selection handed to a model. Both backends cap near a
+    // 4096-token window; 4000 characters leaves room for the instructions and
+    // the response. Enforced at hotkey press so an oversized selection is
+    // refused before recording starts.
+    static let maxSelectionCharacters = 4000
+
+    enum Failure: LocalizedError {
+        case noBackend
+        case selectionTooLong
+        case emptyInstruction
+        case interpretationFailed
+        case languageUnsupported
+        case backend(Error)
+
+        var errorDescription: String? {
+            switch self {
+            case .noBackend:
+                return "Voice Edit needs an AI model. Set it up in Settings → Features."
+            case .selectionTooLong:
+                return "That selection is too long for Voice Edit. Select less text and try again."
+            case .emptyInstruction:
+                return "Didn't catch an edit. Try again."
+            case .interpretationFailed:
+                return "Couldn't apply that edit. Try rephrasing it."
+            case .languageUnsupported:
+                return
+                    "Voice Edit isn't available in this language. Download Gemma in Settings → Features."
+            case .backend:
+                // Generic for the HUD; the underlying error is logged by the
+                // caller. Raw backend errors are too technical for the pill.
+                return "Voice Edit failed. Try again."
+            }
+        }
+    }
+
+    private static let log = Logger(
+        subsystem: "com.naktor.barktor", category: "edit-interpreter")
+
+    static var isAvailable: Bool {
+        appleFoundationReady || LLMModelManager.isInstalled()
+    }
+
+    private static var appleFoundationReady: Bool {
+        if #available(macOS 26.0, *) {
+            return MeetingSummarizer.appleFoundationAvailable
+        }
+        return false
+    }
+
+    // Fire-and-forget warm of the active backend. Called the moment the
+    // voice-edit hotkey is pressed so a cold Gemma load overlaps with the
+    // user speaking instead of stalling the edit.
+    static func warmUp() {
+        if appleFoundationReady {
+            #if canImport(FoundationModels) && !NO_APPLE_FM
+            if #available(macOS 26.0, *) {
+                LanguageModelSession(instructions: systemPrompt).prewarm()
+            }
+            #endif
+            return
+        }
+        if LLMModelManager.isInstalled() {
+            Task { await LlamaRuntime.shared.warmUp() }
+        }
+    }
+
+    // On any throw the caller leaves the selection untouched.
+    static func apply(
+        instruction rawInstruction: String, to selection: String
+    ) async throws
+        -> String
+    {
+        let instruction = rawInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !instruction.isEmpty else { throw Failure.emptyInstruction }
+        guard selection.count <= maxSelectionCharacters else { throw Failure.selectionTooLong }
+
+        let plan = try await interpret(instruction: instruction, selection: selection)
+        let edited = try applyPlan(plan, to: selection)
+        return reconcile(edited, plan: plan, selection: selection)
+    }
+
+    // MARK: - Backend routing
+
+    private static func interpret(
+        instruction: String, selection: String
+    ) async throws
+        -> VoiceEditPlan
+    {
+        if appleFoundationReady {
+            #if canImport(FoundationModels) && !NO_APPLE_FM
+            if #available(macOS 26.0, *) {
+                return try await interpretWithAppleFM(instruction: instruction, selection: selection)
+            }
+            #endif
+        }
+        if LLMModelManager.isInstalled() {
+            return try await interpretWithGemma(instruction: instruction, selection: selection)
+        }
+        throw Failure.noBackend
+    }
+
+    #if canImport(FoundationModels) && !NO_APPLE_FM
+    @available(macOS 26.0, *)
+    private static func interpretWithAppleFM(
+        instruction: String, selection: String
+    ) async throws
+        -> VoiceEditPlan
+    {
+        // A fresh session per edit - reusing one would accumulate prior turns
+        // against the 4096-token context budget.
+        let session = LanguageModelSession(instructions: systemPrompt)
+        let prompt = """
+            \(formatSpec)
+
+            \(userPrompt(instruction: instruction, selection: selection))
+            """
+        let raw: String
+        do {
+            let response = try await session.respond(
+                to: prompt,
+                options: GenerationOptions(temperature: 0.2, maximumResponseTokens: 1500)
+            )
+            raw = response.content
+        } catch let error as LanguageModelSession.GenerationError {
+            if case .exceededContextWindowSize = error { throw Failure.selectionTooLong }
+            // Apple FM can reject the instruction's language at generation
+            // time even when `supportsLocale()` passed — it returns true for
+            // "close" languages too. Fall through to Gemma when it's
+            // installed, matching MeetingSummarizer's locale fallback;
+            // otherwise tell the user how to get a backend that can handle
+            // this language.
+            if case .unsupportedLanguageOrLocale = error {
+                guard LLMModelManager.isInstalled() else {
+                    log.info("Apple FM rejected the instruction locale; Gemma not installed.")
+                    throw Failure.languageUnsupported
+                }
+                log.info("Apple FM rejected the instruction locale; retrying with Gemma.")
+                return try await interpretWithGemma(instruction: instruction, selection: selection)
+            }
+            throw Failure.backend(error)
+        }
+        guard let plan = parsePlan(raw) else {
+            log.error("Apple FM edit plan did not parse; raw length \(raw.count, privacy: .public).")
+            throw Failure.interpretationFailed
+        }
+        return plan
+    }
+    #endif
+
+    private static func interpretWithGemma(
+        instruction: String, selection: String
+    ) async throws
+        -> VoiceEditPlan
+    {
+        let prompt = gemmaPrompt(instruction: instruction, selection: selection)
+        // 1400 output tokens covers a holistic rewrite of a max-size selection;
+        // targeted edits stop early at end-of-turn so the cap doesn't slow them.
+        let parameters = LlamaSession.Parameters(maxTokens: 1400, temperature: 0.2)
+
+        let work = Task { try await LlamaRuntime.shared.generate(prompt: prompt, parameters: parameters) }
+        let watchdog = Task<Void, Error> {
+            try await Task.sleep(for: .seconds(25))
+            work.cancel()
+        }
+        let raw: String
+        do {
+            raw = try await work.value
+            watchdog.cancel()
+        } catch {
+            watchdog.cancel()
+            throw Failure.backend(error)
+        }
+
+        guard let plan = parsePlan(raw) else {
+            log.error("Gemma edit plan did not parse; raw length \(raw.count, privacy: .public).")
+            throw Failure.interpretationFailed
+        }
+        return plan
+    }
+
+    // MARK: - Apply the plan
+
+    private static func applyPlan(_ plan: VoiceEditPlan, to selection: String) throws -> String {
+        switch plan.scope {
+        case .holistic:
+            let rewrite = plan.rewrite.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !rewrite.isEmpty else { throw Failure.interpretationFailed }
+            return rewrite
+
+        case .targeted:
+            // Guardrail: a 'targeted' edit whose find string covers most of
+            // the selection is usually a rewrite the model mislabelled — or a
+            // runaway find — so reject it rather than letting it overwrite. The
+            // exception is a find that *is* the whole selection: that's the user
+            // selecting exactly the word/phrase to swap ("select 'linked', say
+            // 'change to tonight'"), a clean, intended replacement. Allow it,
+            // matching the case-insensitivity the apply step uses below.
+            let trimmedSelection = selection.trimmingCharacters(in: .whitespacesAndNewlines)
+            for span in plan.edits where span.find.count > selection.count * 6 / 10 {
+                let coversWholeSelection =
+                    span.find.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .compare(trimmedSelection, options: .caseInsensitive) == .orderedSame
+                if coversWholeSelection { continue }
+                log.info(
+                    "Voice edit rejected: targeted find covers \(span.find.count, privacy: .public) of \(selection.count, privacy: .public) chars."
+                )
+                throw Failure.interpretationFailed
+            }
+
+            var result = selection
+            var anyApplied = false
+            for span in plan.edits {
+                guard !span.find.isEmpty else { continue }
+                if result.contains(span.find) {
+                    result = result.replacingOccurrences(of: span.find, with: span.replace)
+                    anyApplied = true
+                } else if result.range(of: span.find, options: .caseInsensitive) != nil {
+                    result = result.replacingOccurrences(
+                        of: span.find, with: span.replace, options: .caseInsensitive)
+                    anyApplied = true
+                }
+            }
+            // No span matched — the model hallucinated the find text or ASR
+            // garbled it. Keep the selection rather than write nothing useful.
+            guard anyApplied else { throw Failure.interpretationFailed }
+            return result
+        }
+    }
+
+    // MARK: - Deterministic post-processing
+
+    private static func reconcile(
+        _ edited: String, plan: VoiceEditPlan, selection: String
+    )
+        -> String
+    {
+        let result = sanitize(edited, selectionWasWrapped: isWrapped(selection))
+        // A targeted edit is interior: it must not change the passage's
+        // ending punctuation. If the selection had no terminal . ? ! and the
+        // edit introduced one (ASR completing the spoken phrase), strip it.
+        // Holistic rewrites are left alone — the user asked to transform the
+        // text, so model-chosen punctuation is intentional.
+        guard case .targeted = plan.scope else { return result }
+        let terminators: Set<Character> = [".", "?", "!", "…"]
+        let selectionTerminated =
+            lastNonWhitespace(of: selection).map(terminators.contains) ?? false
+        guard !selectionTerminated else { return result }
+        var trimmed = result
+        while let last = trimmed.last, terminators.contains(last) {
+            trimmed.removeLast()
+        }
+        return trimmed
+    }
+
+    // Strips quote / code-fence wrapping the model occasionally adds around
+    // its answer. Only unwraps when the selection itself wasn't wrapped, so a
+    // legitimately quoted selection survives.
+    private static func sanitize(_ text: String, selectionWasWrapped: Bool) -> String {
+        var result = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !selectionWasWrapped else { return result }
+        let pairs: [(Character, Character)] = [
+            ("\"", "\""), ("'", "'"), ("“", "”"), ("‘", "’"), ("`", "`"),
+        ]
+        for (open, close) in pairs where result.count >= 2 {
+            if result.first == open, result.last == close {
+                result = String(result.dropFirst().dropLast())
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                break
+            }
+        }
+        return result
+    }
+
+    private static func isWrapped(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 2, let first = trimmed.first, let last = trimmed.last else {
+            return false
+        }
+        let openers: Set<Character> = ["\"", "'", "“", "‘", "`"]
+        let closers: Set<Character> = ["\"", "'", "”", "’", "`"]
+        return openers.contains(first) && closers.contains(last)
+    }
+
+    private static func lastNonWhitespace(of text: String) -> Character? {
+        text.reversed().first { !$0.isWhitespace }
+    }
+
+    // MARK: - Response parsing
+
+    // Parses the fenced text protocol both backends are asked to emit. Returns
+    // nil if nothing usable is found — the caller then leaves the selection
+    // untouched rather than guessing.
+    private static func parsePlan(_ raw: String) -> VoiceEditPlan? {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let isHolistic =
+            text.range(of: #"SCOPE:\s*holistic"#, options: [.regularExpression, .caseInsensitive])
+            != nil
+        if isHolistic {
+            guard let rewrite = extractBlock(in: text, after: "@@REWRITE@@", upTo: "@@END@@") else {
+                return nil
+            }
+            return VoiceEditPlan(scope: .holistic, edits: [], rewrite: rewrite)
+        }
+
+        var spans: [VoiceEditPlan.Span] = []
+        var cursor = text.startIndex
+        while let findMarker = text.range(of: "@@FIND@@", range: cursor..<text.endIndex) {
+            guard
+                let replaceMarker = text.range(
+                    of: "@@REPLACE@@", range: findMarker.upperBound..<text.endIndex),
+                let endMarker = text.range(
+                    of: "@@END@@", range: replaceMarker.upperBound..<text.endIndex)
+            else { break }
+            let find = String(text[findMarker.upperBound..<replaceMarker.lowerBound])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let replace = String(text[replaceMarker.upperBound..<endMarker.lowerBound])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !find.isEmpty {
+                spans.append(VoiceEditPlan.Span(find: find, replace: replace))
+            }
+            cursor = endMarker.upperBound
+        }
+        return spans.isEmpty ? nil : VoiceEditPlan(scope: .targeted, edits: spans, rewrite: "")
+    }
+
+    private static func extractBlock(
+        in text: String, after open: String, upTo close: String
+    )
+        -> String?
+    {
+        guard let openRange = text.range(of: open) else { return nil }
+        let closeLower =
+            text.range(of: close, range: openRange.upperBound..<text.endIndex)?.lowerBound
+            ?? text.endIndex
+        let body = String(text[openRange.upperBound..<closeLower])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return body.isEmpty ? nil : body
+    }
+
+    // MARK: - Prompts
+
+    private static let systemPrompt = """
+        You are a precise text editor. The user selected a passage of text and \
+        spoke an instruction describing how to change it. Apply the instruction \
+        exactly and report the change.
+
+        Choose one of two modes:
+        - "targeted": the instruction changes specific words or phrases. List \
+        each exact substring to find in the passage and what to replace it \
+        with. Keep every find string as short as possible and leave the rest of \
+        the passage alone.
+        - "holistic": the instruction asks to rephrase, restructure, summarise, \
+        change the tone of, or translate the whole passage. Return the full \
+        edited passage.
+
+        Prefer "targeted" whenever the instruction names particular words. Use \
+        "holistic" only for whole-passage transformations. Never add or remove \
+        sentence-ending punctuation the instruction didn't ask for.
+        """
+
+    private static let formatSpec = """
+        Respond in EXACTLY one of these two formats and nothing else — no \
+        explanation, no quotes around your answer.
+
+        Targeted edit — one or more blocks:
+        SCOPE: targeted
+        @@FIND@@
+        exact text copied from the passage
+        @@REPLACE@@
+        replacement text
+        @@END@@
+
+        Holistic edit:
+        SCOPE: holistic
+        @@REWRITE@@
+        the full edited passage
+        @@END@@
+        """
+
+    private static func userPrompt(instruction: String, selection: String) -> String {
+        """
+        Selected passage:
+        \"\"\"
+        \(selection)
+        \"\"\"
+
+        Spoken instruction:
+        \"\"\"
+        \(instruction)
+        \"\"\"
+        """
+    }
+
+    // Gemma takes the role, format, and request in one user turn wrapped in
+    // Gemma 3's chat template — the BOS token is added by the tokenizer,
+    // <end_of_turn> closes the user turn. Selection and instruction are
+    // untrusted content: neutralize control tokens so neither can close the
+    // turn early (see GemmaTemplate). Trade-off: applyPlan matches spans
+    // against the ORIGINAL selection, so an edit targeting a literal control
+    // token no-ops, and a holistic rewrite drops it - accepted, since text
+    // that carries these tokens must never reach the template intact.
+    private static func gemmaPrompt(instruction: String, selection: String) -> String {
+        let body = """
+            \(systemPrompt)
+
+            \(formatSpec)
+
+            \(userPrompt(
+                instruction: GemmaTemplate.neutralize(instruction),
+                selection: GemmaTemplate.neutralize(selection)))
+            """
+        return """
+            <start_of_turn>user
+            \(body)<end_of_turn>
+            <start_of_turn>model
+
+            """
+    }
+}
+
+// Backend-agnostic edit plan, decoded from the fenced text protocol.
+struct VoiceEditPlan {
+    enum Scope { case targeted, holistic }
+    struct Span {
+        let find: String
+        let replace: String
+    }
+    var scope: Scope
+    var edits: [Span]
+    var rewrite: String
+}

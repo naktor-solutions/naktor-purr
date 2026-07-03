@@ -1,8 +1,26 @@
 # Changelog
 
-All notable changes to Purr are documented here. The format follows
+All notable changes to Barktor are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org).
+
+## [0.3.0] - 2026-07-03
+
+### Changed
+- **Purr is now Barktor.** New app name, bundle identifier
+  (`com.naktor.barktor`), repository (`naktor-solutions/barktor`), and
+  release asset names (`Barktor.dmg`). Because the bundle identifier
+  changed, macOS asks you to re-grant the three permissions once after
+  updating.
+- Default meetings folder is now
+  `~/Library/Application Support/Barktor/Meetings`.
+
+### Added
+- One-time migration from a 0.2.x Purr install: settings, dictation
+  history, downloaded models, and meeting transcripts all move to the new
+  identity automatically on first launch. If you update in place from
+  0.2.0, the bundle in /Applications keeps its old `Purr.app` file name -
+  installing fresh from the DMG (and deleting `Purr.app`) is recommended.
 
 ## [0.2.0] - 2026-07-03
 

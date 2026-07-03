@@ -2,10 +2,10 @@
 import PackageDescription
 
 let package = Package(
-    name: "Purr",
+    name: "Barktor",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "Purr", targets: ["Purr"])
+        .executable(name: "Barktor", targets: ["Barktor"])
     ],
     dependencies: [
         .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.9.0"),
@@ -41,22 +41,22 @@ let package = Package(
             ]
         ),
         .executableTarget(
-            name: "Purr",
+            name: "Barktor",
             dependencies: [
                 .product(name: "WhisperKit", package: "WhisperKit"),
                 .product(name: "FluidAudio", package: "FluidAudio"),
                 "llama",
                 "CEcho",
             ],
-            path: "Sources/Purr",
+            path: "Sources/Barktor",
             swiftSettings: [
                 .enableUpcomingFeature("BareSlashRegexLiterals")
             ]
         ),
         .testTarget(
-            name: "PurrTests",
-            dependencies: ["Purr"],
-            path: "Tests/PurrTests"
+            name: "BarktorTests",
+            dependencies: ["Barktor"],
+            path: "Tests/BarktorTests"
         ),
     ]
 )

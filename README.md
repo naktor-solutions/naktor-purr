@@ -5,7 +5,9 @@
   <img src="Resources/naktor-logo.svg" alt="Naktor" width="360">
 </picture>
 
-# Naktor Purr
+# Barktor
+
+**Barktor, by [Naktor](https://naktor.com)**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-black?logo=apple)](#)
@@ -23,7 +25,7 @@ Local voice-to-text dictation for macOS Apple Silicon. A free, MIT-licensed alte
 
 ## Install
 
-Download `Purr.dmg` from the [latest release](https://github.com/naktor-solutions/naktor-purr/releases/latest), drag Purr to Applications, then **right-click → Open** the first time (builds are not notarized by Apple). Updates after that are one click from **About Purr > Update**.
+Download `Barktor.dmg` from the [latest release](https://github.com/naktor-solutions/barktor/releases/latest), drag Barktor to Applications, then **right-click → Open** the first time (builds are not notarized by Apple). Updates after that are one click from **About Barktor > Update**.
 
 ## Screenshots
 
@@ -53,11 +55,11 @@ Download `Purr.dmg` from the [latest release](https://github.com/naktor-solution
 ## QuickStart
 
 ```bash
-git clone https://github.com/naktor-solutions/naktor-purr.git
-cd naktor-purr
+git clone https://github.com/naktor-solutions/barktor.git
+cd barktor
 make app
-mv dist/Purr.app /Applications/
-open /Applications/Purr.app
+mv dist/Barktor.app /Applications/
+open /Applications/Barktor.app
 ```
 
 First launch:
@@ -88,7 +90,7 @@ While a meeting is recording, the dictation hotkey is suspended so a reflexive p
 - **Meeting summaries**: Each meeting can save a sidecar `.summary.md` with a TL;DR, decisions, action items, and notes. Uses Apple's on-device model on macOS 26+, or Gemma 3 4B locally on older systems.
 - **Voice editing**: Select text, hold the voice-edit hotkey, and speak the change. A parser handles "change X to Y", "delete X", "capitalize", and more; anything else replaces the selection wholesale.
 - **In-speech voice commands**: Punctuate, break paragraphs, and undo hands-free by saying "comma", "period", "new paragraph", or "scratch that" as you dictate. Add your own in Settings.
-- **Custom dictionary**: Teach Purr the proper nouns and acronyms it keeps mishearing - map "fluid audio" to "FluidAudio" or "ts" to "TypeScript".
+- **Custom dictionary**: Teach Barktor the proper nouns and acronyms it keeps mishearing - map "fluid audio" to "FluidAudio" or "ts" to "TypeScript".
 - **Filler trimming**: "um", "uh", and "er" are stripped automatically; add your own filler words in Settings.
 - **Flexible hotkeys**: Pick each feature's trigger from a few built-in presets - a bare modifier, a modifier combo, or a function key.
 - **Native and private**: Pure Swift and SwiftUI (no Electron, no Tauri), with everything running on-device and zero telemetry.
@@ -170,9 +172,9 @@ Any standard text field. Voice editing works in Accessibility-supported fields (
 </details>
 
 <details>
-<summary><strong>How do I update Purr?</strong></summary>
+<summary><strong>How do I update Barktor?</strong></summary>
 
-Open the menu bar > About Purr and it checks GitHub Releases automatically (or click "Check for Updates"). A new version downloads, verifies its checksum, and relaunches in place.
+Open the menu bar > About Barktor and it checks GitHub Releases automatically (or click "Check for Updates"). A new version downloads, verifies its checksum, and relaunches in place.
 
 </details>
 
@@ -184,30 +186,30 @@ Either the bundle ID changed (e.g. you swapped in a different fork) or you revok
 </details>
 
 <details>
-<summary><strong>How do I delete the models or fully uninstall Purr?</strong></summary>
+<summary><strong>How do I delete the models or fully uninstall Barktor?</strong></summary>
 
 To reclaim disk space without uninstalling, open **Settings > Customization > Models** and click **Delete Models**. It removes every downloaded model (Parakeet, Whisper, the diarizer, and Gemma) while keeping your meeting transcripts and preferences; the models re-download automatically the next time a feature needs them.
 
-To uninstall completely, quit Purr, drag `Purr.app` to the Trash, then remove its data. Everything Purr writes - all model weights and your meeting transcripts - lives under one folder:
+To uninstall completely, quit Barktor, drag `Barktor.app` to the Trash, then remove its data. Everything Barktor writes - all model weights and your meeting transcripts - lives under one folder:
 
 ```bash
-rm -rf ~/Library/Application\ Support/Purr   # models + meeting transcripts
-defaults delete com.naktor.purr              # preferences
+rm -rf ~/Library/Application\ Support/Barktor   # models + meeting transcripts
+defaults delete com.naktor.barktor              # preferences
 ```
 
-macOS can't run cleanup code when an app is dragged to the Trash, so those are the only leftovers. Because every model now lives under that single folder, app-cleaner utilities that search for "Purr" find all of it too.
+macOS can't run cleanup code when an app is dragged to the Trash, so those are the only leftovers. Because every model now lives under that single folder, app-cleaner utilities that search for "Barktor" find all of it too.
 
 </details>
 
 ## License
 
-Purr itself is MIT-licensed. Copyright (c) 2026 Arun Brahma. See [LICENSE](LICENSE).
+Barktor is MIT-licensed, as is the Purr codebase it descends from. Copyright (c) 2026 Arun Brahma. See [LICENSE](LICENSE).
 
 ### Third-party licenses
 
-Purr builds on open-source work in two categories, handled differently.
+Barktor builds on open-source work in two categories, handled differently.
 
-**Model weights** download on first use and are never redistributed by Purr; each carries its own terms:
+**Model weights** download on first use and are never redistributed by Barktor; each carries its own terms:
 
 - **Parakeet TDT v2** (NVIDIA, run via FluidAudio) - CC-BY-4.0. Powers the default English dictation, voice editing, and meeting transcription.
 - **Whisper** (OpenAI, via WhisperKit) - MIT. Optional engine for other languages.
