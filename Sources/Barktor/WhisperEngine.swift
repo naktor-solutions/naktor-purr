@@ -168,6 +168,45 @@ final class WhisperEngine: TranscriptionEngine {
             duration: TimeInterval(samples.count) / 16_000.0
         )
     }
+
+    // Real batch progress. WhisperKit tracks each transcribe call on
+    // pipe.progress: runTranscribeTask adds one child Progress per call whose
+    // units are SECONDS of audio seeked, and resets the parent when a call
+    // finishes. Polling fractionCompleted is simpler and safer than the
+    // per-token TranscriptionCallback (which fires off-actor) for the same
+    // fidelity a progress bar needs. Verified against WhisperKit's
+    // TranscribeTask.swift (progress.totalUnitCount = totalSeekDuration).
+    private func pollingProgress<T>(
+        progress: @escaping @Sendable (Double) -> Void,
+        during operation: () async throws -> T
+    ) async rethrows -> T {
+        let poller = Task { [weak self] in
+            while !Task.isCancelled {
+                if let fraction = await self?.pipe?.progress.fractionCompleted, fraction > 0 {
+                    progress(min(1, fraction))
+                }
+                try? await Task.sleep(for: .milliseconds(400))
+            }
+        }
+        defer { poller.cancel() }
+        return try await operation()
+    }
+
+    func transcribe(
+        samples: [Float], progress: @escaping @Sendable (Double) -> Void
+    ) async throws -> String {
+        try await pollingProgress(progress: progress) {
+            try await transcribe(samples: samples)
+        }
+    }
+
+    func transcribeDetailed(
+        samples: [Float], progress: @escaping @Sendable (Double) -> Void
+    ) async throws -> DetailedTranscription {
+        try await pollingProgress(progress: progress) {
+            try await transcribeDetailed(samples: samples)
+        }
+    }
 }
 
 enum EngineError: LocalizedError {

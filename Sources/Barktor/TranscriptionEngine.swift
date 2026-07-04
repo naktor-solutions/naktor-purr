@@ -19,6 +19,17 @@ protocol TranscriptionEngine: AnyObject {
     // (meeting mode) that align text against diarized speaker segments.
     func transcribeDetailed(samples: [Float]) async throws -> DetailedTranscription
     func makeStreamingSession() async throws -> any StreamingSession
+
+    // Progress-reporting variants for long batch runs (the background queue).
+    // fraction ∈ [0, 1]. Engines with no real signal (Parakeet, Nemotron)
+    // keep the defaults below, which never call the closure — the UI then
+    // shows an indeterminate "Transcribing…" instead of a fake percentage.
+    func transcribe(
+        samples: [Float], progress: @escaping @Sendable (Double) -> Void
+    ) async throws -> String
+    func transcribeDetailed(
+        samples: [Float], progress: @escaping @Sendable (Double) -> Void
+    ) async throws -> DetailedTranscription
 }
 
 // Events from a live dictation session, in arrival order:
@@ -42,4 +53,18 @@ protocol StreamingSession: AnyObject {
     func feed(samples: [Float]) async throws
     func finish() async throws
     func cancel() async
+}
+
+extension TranscriptionEngine {
+    func transcribe(
+        samples: [Float], progress: @escaping @Sendable (Double) -> Void
+    ) async throws -> String {
+        try await transcribe(samples: samples)
+    }
+
+    func transcribeDetailed(
+        samples: [Float], progress: @escaping @Sendable (Double) -> Void
+    ) async throws -> DetailedTranscription {
+        try await transcribeDetailed(samples: samples)
+    }
 }
