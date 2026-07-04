@@ -250,8 +250,12 @@ final class TranscriptionQueue: ObservableObject {
             } else {
                 audioURL = jobDirectory(job.id).appendingPathComponent("audio.wav")
             }
-            let samples = try WAVFile.read(url: audioURL)
-            let prepared = AudioPreprocessor.normalize(samples).samples
+            // Read + normalize off the main actor: a dropped multi-hour file
+            // is hundreds of MB of Float32, and the UI must not pay for it.
+            let prepared = try await Task.detached(priority: .utility) {
+                let samples = try WAVFile.read(url: audioURL)
+                return AudioPreprocessor.normalize(samples).samples
+            }.value
             history.update(payload.entryID) { $0.status = .transcribing }
             let raw = try await engine.transcribe(samples: prepared) { [weak self] fraction in
                 Task { @MainActor [weak self] in self?.setFraction(fraction) }
