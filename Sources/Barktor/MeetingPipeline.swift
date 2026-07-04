@@ -1,5 +1,4 @@
 import AppKit
-import FluidAudio
 import Foundation
 import os.log
 
@@ -14,7 +13,6 @@ final class MeetingPipeline: ObservableObject {
     enum State: Equatable {
         case idle
         case recording(startedAt: Date)
-        case processing
         case error(String)
     }
 
@@ -33,14 +31,8 @@ final class MeetingPipeline: ObservableObject {
     // builds against the macOS 14.0 deployment target. nil when system audio
     // is unavailable or failed to start - the meeting is mic-only then.
     private var systemCapture: AnyObject?
-    // Resolved at stop() time, not when the pipeline is built or when
-    // recording starts - so whatever engine is selected in Settings when
-    // processing begins wins, even if the user changed it mid-recording.
-    // The label feeds the transcript header ("_Engine: ..._").
-    private let engineProvider: () -> (engine: any TranscriptionEngine, label: String)
-    private let diarizer = Diarizer()
     private let hud: RecordingHUD
-    private let summarizer: MeetingSummarizer
+    private let queue: TranscriptionQueue
     private var elapsedTimer: Timer?
     private var levelTask: Task<Void, Never>?
     private var systemLevelTask: Task<Void, Never>?
@@ -55,42 +47,18 @@ final class MeetingPipeline: ObservableObject {
 
     private let log = Logger(subsystem: "com.naktor.barktor", category: "meeting")
 
-    init(
-        hud: RecordingHUD,
-        summarizer: MeetingSummarizer,
-        engineProvider: @escaping () -> (engine: any TranscriptionEngine, label: String)
-    ) {
+    init(hud: RecordingHUD, queue: TranscriptionQueue) {
         self.hud = hud
-        self.summarizer = summarizer
-        self.engineProvider = engineProvider
-    }
-
-    func unloadDiarizer() {
-        diarizer.unload()
-    }
-
-    func downloadDiarizer() async throws {
-        try await diarizer.downloadAndWarmup()
-    }
-
-    // .recording is excluded - a press during recording is the *stop* gesture.
-    // The merge/processing pass must never be interrupted or duplicated.
-    private var meetingBusy: Bool {
-        if case .processing = state { return true }
-        return false
+        self.queue = queue
     }
 
     func toggle() {
-        if hud.shouldIgnorePress(whileBusy: meetingBusy) { return }
+        if hud.shouldIgnorePress(whileBusy: false) { return }
         switch state {
         case .idle, .error:
             start()
         case .recording:
             Task { await stop() }
-        case .processing:
-            // Refuse to interrupt - the merge pass takes a few seconds and
-            // restarting mid-merge would be error-prone.
-            break
         }
     }
 
@@ -174,6 +142,11 @@ final class MeetingPipeline: ObservableObject {
         }
     }
 
+    // Stop is now persist-and-enqueue: the WAVs land in the queue's job
+    // directory (crash-safe), the pipeline returns to .idle immediately —
+    // a new meeting can start while the previous one transcribes — and the
+    // queue owns everything that used to run inline here (echo cancel,
+    // diarization, ASR, document, summary).
     private func stop() async {
         elapsedTimer?.invalidate()
         elapsedTimer = nil
@@ -186,203 +159,56 @@ final class MeetingPipeline: ObservableObject {
         // Align the tap to the mic's continuous timeline; the tap omits silent
         // gaps, so its raw timestamps don't share the mic's clock origin.
         let systemCaptureResult = stopSystemCapture(micStartHostTime: recorder.captureStartHostTime)
-        let systemSamples = systemCaptureResult.samples
         guard samples.count >= 16_000 * 2 else {
             // Less than 2 s of audio is almost always an accidental tap.
             state = .idle
             hud.hide()
             return
         }
-        state = .processing
-        hud.show(.transcribing)
-        let (engine, engineLabel) = engineProvider()
-
+        state = .idle
         do {
-            let processingStarted = Date()
-            log.info(
-                "Meeting processing: \(samples.count, privacy: .public) mic samples + \(systemSamples.count, privacy: .public) system samples (~\(String(format: "%.2f", Double(samples.count) / 16_000.0), privacy: .public)s)"
-            )
-            let duration = TimeInterval(samples.count) / 16_000.0
-            let document: MeetingDocument.Output
-            if systemSamples.isEmpty {
-                // Mic-only: the microphone is the local user, so every
-                // utterance is "You" (source beats voice). No diarization runs
-                // on the mic track - it can't reliably tell in-room speakers
-                // apart anyway, and skipping it means a short or quiet solo clip
-                // can never be rejected with "no speech detected".
-                let asr = try await engine.transcribeDetailed(samples: samples)
-                logASRResult(asr, track: "mic")
-                warnIfMissingTimings(asr, track: "mic")
-                log.info(
-                    "Meeting transcribe complete in \(String(format: "%.2f", Date().timeIntervalSince(processingStarted)), privacy: .public)s: \(asr.tokens.count, privacy: .public) tokens, single local speaker (You)"
-                )
-                document = MeetingDocument.format(
-                    localOnly: asr,
-                    duration: duration,
-                    recordedAt: Date(),
-                    engineLabel: engineLabel
-                )
-            } else {
-                // Two tracks: the system audio carries the remote participants
-                // (diarized into Speaker N); the echo-cancelled microphone
-                // carries the local user (labelled You). The two ASR passes
-                // run sequentially on the same engine; diarization runs
-                // concurrently with them.
-                // Echo cancellation is pure CPU work; run it off the main
-                // actor so the HUD stays responsive during processing.
-                let cleanedMic = await Task.detached {
-                    EchoCanceller.process(mic: samples, reference: systemSamples)
-                }.value
-                async let remoteSegmentsTask = diarizer.diarize(samples: systemSamples)
-                let remoteASR = try await engine.transcribeDetailed(samples: systemSamples)
-                warnIfMissingTimings(remoteASR, track: "remote")
-                let localASR = try await engine.transcribeDetailed(samples: cleanedMic)
-                warnIfMissingTimings(localASR, track: "local")
-                // As in the mic-only path, a diarization failure on the system
-                // track (no remote speech, music, near-silence) must not sink
-                // the meeting. Keep both transcripts; the remote side just
-                // won't carry Speaker N labels.
-                let remoteSegments: [TimedSpeakerSegment]
-                do {
-                    remoteSegments = try await remoteSegmentsTask
-                } catch {
-                    log.error(
-                        "Meeting diarization failed on the system track (\(error.localizedDescription, privacy: .public)) - saving transcripts without remote speaker labels."
-                    )
-                    remoteSegments = []
-                }
-                log.info(
-                    "Meeting dual-track complete in \(String(format: "%.2f", Date().timeIntervalSince(processingStarted)), privacy: .public)s: local \(localASR.tokens.count, privacy: .public) tokens, remote \(remoteASR.tokens.count, privacy: .public) tokens, \(remoteSegments.count, privacy: .public) speaker segments"
-                )
-                document = MeetingDocument.format(
-                    localASR: localASR,
-                    remoteASR: remoteASR,
-                    remoteSegments: remoteSegments,
-                    duration: duration,
-                    recordedAt: Date(),
-                    engineLabel: engineLabel
-                )
-            }
-            let url = try MeetingDocument.write(document)
-            log.info("Meeting saved → \(url.path, privacy: .public)")
-
-            // Optional: run on-device summarization. We always reveal the
-            // best file in Finder - summary if it exists, transcript
-            // otherwise - so the user lands on what they want to read.
-            let summary = await runSummaryIfEnabled(transcriptURL: url)
-            switch summary {
-            case .produced(let sidecarURL):
-                NSWorkspace.shared.activateFileViewerSelecting([sidecarURL])
-                hud.hide()
-            case .skipped:
-                NSWorkspace.shared.activateFileViewerSelecting([url])
-                hud.hide()
-            case .failed:
-                // The HUD is showing the summary-failure message, which
-                // auto-hides itself - hiding here would cut it off.
-                NSWorkspace.shared.activateFileViewerSelecting([url])
-            }
-            maybeShowSystemAudioNotice(silentButActive: systemCaptureResult.silentButActive)
-            state = .idle
+            try await queue.enqueueMeeting(
+                mic: samples, system: systemCaptureResult.samples, recordedAt: Date(),
+                engine: SettingsStore.shared.meetingEngine,
+                whisperModel: SettingsStore.shared.modelName)
+            hud.showMessage("Transcribing in the background…", autoHideAfter: 3)
         } catch {
-            log.error("Meeting pipeline failed: \(error.localizedDescription, privacy: .public)")
-            state = .error(error.localizedDescription)
-            let mapped = HUDErrorText.message(for: error)
-            hud.showMessage(mapped ?? "Meeting processing failed. Try again.", autoHideAfter: 4)
-            try? await Task.sleep(for: .seconds(4))
-            state = .idle
-        }
-    }
-
-    // Outcome of the optional summarization pass. The transcript is already
-    // on disk by the time summarization runs, so a failure is non-fatal -
-    // but it is no longer silent: `.failed` means the reason is on the HUD.
-    private enum SummaryOutcome {
-        case produced(URL)  // sidecar .summary.md was written
-        case skipped  // toggle off, or no backend installed
-        case failed  // backend failed - reason shown on the HUD
-    }
-
-    // Runs on-device summarization when the toggle is on and a backend is
-    // ready. On failure the transcript still stands; we surface why on the
-    // HUD rather than swallowing it, so a missing summary isn't a mystery.
-    private func runSummaryIfEnabled(transcriptURL: URL) async -> SummaryOutcome {
-        guard SettingsStore.shared.summarizeMeetings else {
-            log.info("Summary skipped: auto-summarize toggle is off.")
-            return .skipped
-        }
-        let backend = MeetingSummarizer.currentBackend()
-        log.info("Summary backend resolved: \(String(describing: backend), privacy: .public)")
-        guard MeetingSummarizer.canSummarizeNow else {
-            log.info("Summary skipped: no backend available (Apple FM off + Gemma not installed).")
-            return .skipped
-        }
-        hud.show(.summarizing)
-        let started = Date()
-        do {
-            let url = try await summarizer.summarize(transcriptURL: transcriptURL)
-            let elapsed = Date().timeIntervalSince(started)
-            log.info(
-                "Summary saved in \(String(format: "%.2f", elapsed), privacy: .public)s → \(url.path, privacy: .public)"
-            )
-            return .produced(url)
-        } catch {
-            let elapsed = Date().timeIntervalSince(started)
+            // Disk full or unwritable queue dir: salvage straight to the
+            // Meetings folder before giving up — the recording must survive.
             log.error(
-                "Meeting summary failed after \(String(format: "%.2f", elapsed), privacy: .public)s: \(error.localizedDescription, privacy: .public)"
-            )
-            // The transcript saved fine - a silently missing summary leaves
-            // the user guessing, so put the reason on the HUD briefly.
-            hud.showMessage(Self.summaryFailureMessage(error), autoHideAfter: 4)
-            return .failed
+                "Meeting enqueue failed: \(error.localizedDescription, privacy: .public)")
+            let saved = salvageDirectly(
+                mic: samples, system: systemCaptureResult.samples)
+            hud.showMessage(
+                saved
+                    ? "Couldn't queue the transcription — audio saved to your Meetings folder."
+                    : "Couldn't save the meeting audio. Check free disk space.",
+                autoHideAfter: 5)
         }
+        maybeShowSystemAudioNotice(silentButActive: systemCaptureResult.silentButActive)
     }
 
-    // Short HUD copy for a summarization failure. The cases that embed a raw
-    // underlying error get a clean generic line here (the full detail is
-    // already in the log via the catch above); only the cases with their own
-    // actionable user-facing text are surfaced verbatim.
-    private static func summaryFailureMessage(_ error: Error) -> String {
-        let generic = "Meeting summary failed. Your transcript was saved."
-        guard let summarizerError = error as? MeetingSummarizer.SummarizerError else {
-            return generic
+    // Last-resort persistence when even the queue directory is unwritable.
+    private func salvageDirectly(mic: [Float], system: [Float]) -> Bool {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HHmm"
+        let stamp = formatter.string(from: Date())
+        let dir = MeetingDocument.meetingsDirectory()
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try WAVFile.write(
+                samples: mic, to: dir.appendingPathComponent("Meeting \(stamp) (audio only).wav"))
+            if !system.isEmpty {
+                try WAVFile.write(
+                    samples: system,
+                    to: dir.appendingPathComponent("Meeting \(stamp) (audio only, system).wav"))
+            }
+            return true
+        } catch {
+            log.error(
+                "Meeting direct salvage failed: \(error.localizedDescription, privacy: .public)")
+            return false
         }
-        switch summarizerError {
-        case .backendUnavailable:
-            return "Meeting summaries need an AI model. Set one up in Settings → Features."
-        case .unsupportedLocale:
-            return summarizerError.errorDescription ?? generic
-        case .contentFlagged(let reason):
-            // The on-device guardrail tripped and no Gemma fallback was installed;
-            // surface the model's own reason verbatim rather than a vague generic.
-            return "Summary failed: \"\(reason)\""
-        case .modelLoadFailed, .emptyResponse, .generationFailed:
-            return generic
-        }
-    }
-
-    // Detailed ASR diagnostics. The "no speech detected" failures were invisible
-    // from the existing logs because we never recorded what the engine returned -
-    // this surfaces counts without copying transcript content into unified logs.
-    private func logASRResult(_ result: DetailedTranscription, track: String) {
-        let trimmed = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        log.info(
-            "ASR[\(track, privacy: .public)]: \(result.text.count, privacy: .public) chars, \(result.tokens.count, privacy: .public) tokens, audio \(String(format: "%.2f", result.duration), privacy: .public)s, empty \(trimmed.isEmpty, privacy: .public)"
-        )
-    }
-
-    // Some engines (e.g. Whisper models without an alignment head) can return
-    // non-empty text with zero token timings. MeetingDocument still keeps that
-    // text (as an unattributed fallback utterance), but the track silently
-    // loses speaker/diarization attribution - this is the only trace of that
-    // degradation, since it never surfaces as an error.
-    private func warnIfMissingTimings(_ result: DetailedTranscription, track: String) {
-        guard result.tokens.isEmpty else { return }
-        let trimmed = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        log.warning(
-            "ASR[\(track, privacy: .public)]: non-empty text with no token timings - speaker attribution disabled for this track."
-        )
     }
 
     private func startElapsedTimer() {

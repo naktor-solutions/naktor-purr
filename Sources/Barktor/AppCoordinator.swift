@@ -11,17 +11,18 @@ import os.log
 // * **Dictation (transcribe)** - record while hotkey held, on release run
 //   either batch transcribe + paste or EOU streaming + live typing.
 //   Decided per-press by `shouldStreamThisRecording()`.
-// * **Meeting** - tap-to-toggle long-form recording with offline diarize
-//   on stop, written to a Markdown file. Lives in `MeetingPipeline`.
+// * **Meeting** - tap-to-toggle long-form recording; on stop the audio is
+//   persisted and handed to the background `TranscriptionQueue` (diarize,
+//   ASR, document, summary all run there). Lives in `MeetingPipeline`.
 // * **Voice edit** - hold while text is selected; transcribed speech is
 //   parsed as an edit instruction and applied via Accessibility (or paste
 //   fallback). Lives in `VoiceEditor`.
 //
 // While a meeting is recording, dictation is suspended at the hotkey
 // layer - accidentally inserting batch transcripts mid-meeting would be
-// bad. Voice-edit is independent and can fire any time the meeting isn't
-// actively processing (see handleVoiceEditPress()) - during processing it
-// may share the same WhisperEngine instance as the meeting transcription.
+// bad. Voice-edit is independent and can fire any time - the queue never
+// borrows the live dictation/voice-edit engine, so there's no shared-pipe
+// hazard to gate against.
 @MainActor
 final class AppCoordinator: ObservableObject {
     enum State: Equatable {
@@ -132,6 +133,9 @@ final class AppCoordinator: ObservableObject {
     // Nemotron multilingual streaming — the only multilingual engine that
     // supports Smart Typing (Parakeet v3 and Whisper are batch-only).
     private var nemotron = NemotronStreamingEngine()
+    // Owned here (not by MeetingPipeline) since the queue is what diarizes
+    // now; Settings' download/unload flows reach it through the coordinator.
+    private let diarizer = Diarizer()
     private let summarizer = MeetingSummarizer.shared
     private var meeting: MeetingPipeline!
     private var voiceEditor: VoiceEditor!
@@ -226,13 +230,7 @@ final class AppCoordinator: ObservableObject {
         HistoryStore.shared.retentionProvider = { SettingsStore.shared.historyAudioRetention }
         HistoryStore.shared.startDailySweeps()
 
-        meeting = MeetingPipeline(
-            hud: hud,
-            summarizer: summarizer,
-            engineProvider: { [weak self] in
-                self?.currentMeetingEngine() ?? (ParakeetEngine(), "Parakeet TDT v2")
-            }
-        )
+        meeting = MeetingPipeline(hud: hud, queue: TranscriptionQueue.shared)
         voiceEditor = VoiceEditor(hud: hud) { [weak self] in
             // Voice-edit always uses whichever engine the user has selected
             // - they may want fast Tiny EN for edits even if Parakeet is
@@ -245,7 +243,7 @@ final class AppCoordinator: ObservableObject {
         meetingObserver = meeting.$state.sink { [weak self] state in
             guard let self else { return }
             switch state {
-            case .recording, .processing:
+            case .recording:
                 self.hotkey.suspendDictation(true)
                 self.meetingActive = true
             case .idle, .error:
@@ -299,10 +297,10 @@ final class AppCoordinator: ObservableObject {
     @discardableResult
     func deleteDiarizationModel() -> DiarizerDeleteResult {
         switch meeting.state {
-        case .recording, .processing: return .busy
+        case .recording: return .busy
         case .idle, .error: break
         }
-        meeting.unloadDiarizer()
+        diarizer.unload()
         do {
             try Diarizer.delete()
         } catch {
@@ -316,7 +314,7 @@ final class AppCoordinator: ObservableObject {
 
     func downloadDiarizationModel() async -> ModelDownloadResult {
         do {
-            try await meeting.downloadDiarizer()
+            try await diarizer.downloadAndWarmup()
             return .ok
         } catch {
             return .failed(error)
@@ -353,7 +351,7 @@ final class AppCoordinator: ObservableObject {
         if streamingSession != nil || streamingStartupInFlight { return .busy }
         if parakeetBatchProgress != nil { return .busy }
         switch meeting.state {
-        case .recording, .processing: return .busy
+        case .recording: return .busy
         case .idle, .error: break
         }
         if voiceEditState != .idle { return .busy }
@@ -384,7 +382,7 @@ final class AppCoordinator: ObservableObject {
         if streamingSession != nil || streamingStartupInFlight { return .busy }
         if nemotronProgress != nil { return .busy }
         switch meeting.state {
-        case .recording, .processing: return .busy
+        case .recording: return .busy
         case .idle, .error: break
         }
         if voiceEditState != .idle { return .busy }
@@ -434,7 +432,7 @@ final class AppCoordinator: ObservableObject {
         // Release every in-memory session so no deleted file stays mmap'd behind
         // a live handle (and so we reclaim the unified memory).
         await summarizer.unload()
-        meeting.unloadDiarizer()
+        diarizer.unload()
         parakeet.unloadStreamingManager()
         parakeet.unloadBatchManager()
         parakeetV3.unloadBatchManager()
@@ -573,23 +571,7 @@ final class AppCoordinator: ObservableObject {
         hotkey.install()
     }
 
-    // currentMeetingEngine() can hand meetings the very same WhisperEngine
-    // instance dictation/voice-edit uses (reused when the Settings model
-    // matches). WhisperKit is a plain class, not an actor - unlike FluidAudio's
-    // AsrManager, it does not serialize concurrent transcribes - so a voice-edit
-    // fired while the meeting pipeline is transcribing would run two
-    // `pipe.transcribe` calls on shared decoder state at once. Block only
-    // `.processing`: meeting transcription is a single batch pass that runs
-    // exclusively there, so `.recording` is safe (mirrors suspendDictation's
-    // silent-ignore behavior - no HUD message, just don't start).
     private func handleVoiceEditPress() {
-        switch meeting.state {
-        case .processing:
-            log.info("Voice-edit press ignored: meeting is processing (shared engine may be busy).")
-            return
-        case .idle, .recording, .error:
-            break
-        }
         voiceEditor.handlePress()
     }
 
@@ -610,7 +592,7 @@ final class AppCoordinator: ObservableObject {
         }
         if let meeting = meeting {
             switch meeting.state {
-            case .recording, .processing: return false
+            case .recording: return false
             case .idle, .error: break
             }
         }
