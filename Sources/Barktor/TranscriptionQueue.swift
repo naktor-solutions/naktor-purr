@@ -315,18 +315,111 @@ final class TranscriptionQueue: ObservableObject {
     }
 
     // ------------------------------------------------------------------
-    // Meeting jobs — full processing lands in the next task; failing
-    // honestly (salvage + notify) keeps the switch total meanwhile.
+    // Meeting jobs
     // ------------------------------------------------------------------
 
+    // The former MeetingPipeline.stop() body, working from persisted WAVs.
+    // Mic-only: single ASR pass, every utterance is "You". Dual-track: the
+    // echo-cancelled mic is the local user; the system track carries remote
+    // participants and is diarized concurrently with the two ASR passes.
     private func processMeeting(
         _ job: TranscriptionJob, _ payload: TranscriptionJob.MeetingPayload,
         engine: any TranscriptionEngine, engineLabel: String
     ) async {
-        let salvaged = salvageMeetingAudio(job, payload)
-        removeJobDir(job.id)
-        notifier.notifyFailure(
-            message: "Meeting processing is not available yet.", revealURL: salvaged)
+        let title = "Meeting (\(max(1, Int(payload.duration / 60))) min)"
+        setProcessing(label: title, stage: "Preparing", fraction: nil)
+        do {
+            let dir = jobDirectory(job.id)
+            // Read off the main actor: a 90-minute meeting is ~330 MB/track
+            // of Float32, and the UI must not pay for decoding it.
+            let (mic, system): ([Float], [Float]) = try await Task.detached(priority: .utility) {
+                let mic = try WAVFile.read(url: dir.appendingPathComponent("mic.wav"))
+                let system =
+                    payload.hasSystemTrack
+                    ? try WAVFile.read(url: dir.appendingPathComponent("system.wav")) : []
+                return (mic, system)
+            }.value
+            let started = Date()
+            let document: MeetingDocument.Output
+            if system.isEmpty {
+                setStage("Transcribing", fraction: nil)
+                let asr = try await engine.transcribeDetailed(samples: mic) {
+                    [weak self] fraction in
+                    Task { @MainActor [weak self] in self?.setFraction(fraction) }
+                }
+                warnIfMissingTimings(asr, track: "mic")
+                document = MeetingDocument.format(
+                    localOnly: asr, duration: payload.duration,
+                    recordedAt: payload.recordedAt, engineLabel: engineLabel)
+            } else {
+                // Echo cancellation is pure CPU work — keep it off the main
+                // actor so the app stays responsive.
+                let cleanedMic = await Task.detached(priority: .utility) {
+                    EchoCanceller.process(mic: mic, reference: system)
+                }.value
+                async let remoteSegmentsTask = diarize(system)
+                // Two sequential ASR passes share one progress bar, weighted
+                // by how much audio each contributes.
+                let remoteWeight = Double(system.count) / Double(system.count + cleanedMic.count)
+                setStage("Transcribing", fraction: 0)
+                let remoteASR = try await engine.transcribeDetailed(samples: system) {
+                    [weak self] fraction in
+                    Task { @MainActor [weak self] in self?.setFraction(fraction * remoteWeight) }
+                }
+                warnIfMissingTimings(remoteASR, track: "remote")
+                let localASR = try await engine.transcribeDetailed(samples: cleanedMic) {
+                    [weak self] fraction in
+                    Task { @MainActor [weak self] in
+                        self?.setFraction(remoteWeight + fraction * (1 - remoteWeight))
+                    }
+                }
+                warnIfMissingTimings(localASR, track: "local")
+                // A diarization failure (no remote speech, music, silence)
+                // must not sink the meeting — transcripts survive unlabelled.
+                let remoteSegments: [TimedSpeakerSegment]
+                do {
+                    remoteSegments = try await remoteSegmentsTask
+                } catch {
+                    log.error(
+                        "Meeting diarization failed (\(error.localizedDescription, privacy: .public)) - saving without remote speaker labels."
+                    )
+                    remoteSegments = []
+                }
+                document = MeetingDocument.format(
+                    localASR: localASR, remoteASR: remoteASR, remoteSegments: remoteSegments,
+                    duration: payload.duration, recordedAt: payload.recordedAt,
+                    engineLabel: engineLabel)
+            }
+            let url = try writeDocument(document)
+            log.info(
+                "Meeting job done in \(String(format: "%.2f", Date().timeIntervalSince(started)), privacy: .public)s → \(url.path, privacy: .public)"
+            )
+            setStage("Summarizing", fraction: nil)
+            let summaryURL = await summarize(url)
+            removeJobDir(job.id)
+            notifier.notifyMeetingDone(title: title, revealURL: summaryURL ?? url)
+        } catch {
+            log.error(
+                "Meeting job failed: \(error.localizedDescription, privacy: .public)")
+            let salvaged = salvageMeetingAudio(job, payload)
+            removeJobDir(job.id)
+            notifier.notifyFailure(
+                message:
+                    "Meeting transcription failed. The audio was saved to your Meetings folder.",
+                revealURL: salvaged)
+        }
+    }
+
+    // Non-empty text with zero token timings silently loses speaker
+    // attribution (some Whisper models lack an alignment head) — this is the
+    // only trace of that degradation.
+    private func warnIfMissingTimings(_ result: DetailedTranscription, track: String) {
+        guard result.tokens.isEmpty else { return }
+        let trimmed = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        log.warning(
+            "ASR[\(track, privacy: .public)]: non-empty text with no token timings - speaker attribution disabled for this track."
+        )
     }
 
     // Copies the job's WAVs into the Meetings folder so a failed job never
