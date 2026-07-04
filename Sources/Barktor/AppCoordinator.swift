@@ -1340,51 +1340,76 @@ final class AppCoordinator: ObservableObject {
     }
 
     // Re-runs transcription + post-processing over a history entry's saved
-    // WAV. Updates the entry in place - never types into other apps: the
-    // user's cursor is wherever they left it, not where it was when the
-    // original dictation ran.
+    // WAV, now via the background queue: retries serialize with meetings and
+    // drops, so two Whisper pipes never load at once. beginRetry() survives
+    // purely as a double-enqueue guard; the queue calls endRetry() when the
+    // job finishes (see TranscriptionQueue.processFile).
     func retryHistoryEntry(_ id: UUID, using choice: SettingsStore.Engine) async {
         guard let entry = HistoryStore.shared.entries.first(where: { $0.id == id }),
-            let url = HistoryStore.shared.audioURL(for: entry)
+            HistoryStore.shared.audioURL(for: entry) != nil
         else { return }
         guard HistoryStore.shared.beginRetry(id) else { return }
-        defer { HistoryStore.shared.endRetry(id) }
         do {
-            let samples = try WAVFile.read(url: url)
-            let prepared = AudioPreprocessor.normalize(samples).samples
-            // Retry never borrows the live dictation engine: a dictation can
-            // start while this transcribe is awaiting, and WhisperKit does not
-            // serialize concurrent calls on one instance. Parakeet's shared
-            // instance is safe - FluidAudio's AsrManager is an actor. Retries
-            // are rare enough that a fresh Whisper pipe (lazy-loaded on first
-            // use) is the right price for isolation.
-            let model = SettingsStore.shared.modelName
-            let engine: any TranscriptionEngine
-            switch choice {
-            case .parakeet: engine = parakeet
-            case .parakeetV3: engine = parakeetV3
-            case .nemotron: engine = nemotron
-            case .whisper: engine = WhisperEngine(modelName: model)
-            }
-            let raw = try await engine.transcribe(samples: prepared)
-            let processed = makePostProcessor().apply(raw)
-            // Retry produces what a fresh dictation would under the current
-            // settings, including the optional LLM pass; rawText stays the
-            // untouched ASR output.
-            let polished = await LLMPostProcessor.polish(processed.text)
-            HistoryStore.shared.update(id) {
-                $0.rawText = raw
-                $0.processedText = polished
-                $0.status = .ok
-                $0.errorMessage = nil
-                $0.engineUsed = Self.engineUsedLabel(
-                    engine: choice, modelName: model)
-            }
+            try TranscriptionQueue.shared.enqueueFile(
+                jobID: UUID(), entryID: id,
+                sourceFilename: entry.sourceFilename ?? "dictation",
+                duration: entry.duration,
+                engine: choice, whisperModel: SettingsStore.shared.modelName,
+                isRetry: true)
         } catch {
-            log.error("History retry failed: \(error.localizedDescription, privacy: .public)")
-            HistoryStore.shared.update(id) {
-                $0.status = .failed
-                $0.errorMessage = error.localizedDescription
+            log.error(
+                "Retry enqueue failed: \(error.localizedDescription, privacy: .public)")
+            HistoryStore.shared.endRetry(id)
+        }
+    }
+
+    // B1: audio files dropped on the History window. One .queued entry + one
+    // queue job per file; decode runs off-main (a podcast-sized file takes a
+    // moment). The engine is the MEETING engine at drop time — an external
+    // audio is closer to a meeting than to a dictation, and Retry can rerun
+    // it with any other engine.
+    func importAudioFiles(_ urls: [URL]) async {
+        let queue = TranscriptionQueue.shared
+        for url in urls {
+            let entryID = UUID()
+            let jobID = UUID()
+            let filename = url.lastPathComponent
+            let engineChoice = SettingsStore.shared.meetingEngine
+            let model = SettingsStore.shared.modelName
+            do {
+                let samples = try await Task.detached(priority: .utility) {
+                    try AudioFileDecoder.decode16kMono(url: url)
+                }.value
+                let duration = TimeInterval(samples.count) / 16_000.0
+                let jobDir = queue.jobDirectory(jobID)
+                try await Task.detached(priority: .utility) {
+                    try FileManager.default.createDirectory(
+                        at: jobDir, withIntermediateDirectories: true)
+                    try WAVFile.write(
+                        samples: samples, to: jobDir.appendingPathComponent("audio.wav"))
+                }.value
+                HistoryStore.shared.add(
+                    DictationEntry(
+                        id: entryID, date: Date(), duration: duration, rawText: nil,
+                        processedText: nil,
+                        engineUsed: Self.engineUsedLabel(engine: engineChoice, modelName: model),
+                        mode: .batch, status: .queued, errorMessage: nil, audioFilename: nil,
+                        sourceFilename: filename))
+                try queue.enqueueFile(
+                    jobID: jobID, entryID: entryID, sourceFilename: filename,
+                    duration: duration, engine: engineChoice, whisperModel: model,
+                    isRetry: false)
+            } catch {
+                log.error(
+                    "Audio import failed for \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                )
+                // A failed decode still leaves a visible, explainable row.
+                HistoryStore.shared.add(
+                    DictationEntry(
+                        id: entryID, date: Date(), duration: 0, rawText: nil, processedText: nil,
+                        engineUsed: Self.engineUsedLabel(engine: engineChoice, modelName: model),
+                        mode: .batch, status: .failed, errorMessage: error.localizedDescription,
+                        audioFilename: nil, sourceFilename: filename))
             }
         }
     }
